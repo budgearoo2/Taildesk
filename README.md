@@ -15,13 +15,13 @@ TailDesk is an early Windows 11 Home remote-control host. It serves an authentic
 - Settings page can change port, bind address, maximum frame rate, image quality, clipboard, transfer folder, and Windows sign-in startup behavior.
 - A 14-character minimum admin password is required on first launch. Only a salted PBKDF2 hash is stored in the app settings.
 - The Windows setup executable includes TailDesk and its Python runtime/packages. Its startup checkbox controls whether TailDesk runs when that Windows user signs in.
-- Packaged installations check the latest stable public GitHub release at each start and install a newer setup program only after its SHA-256 matches the release metadata. The TailDesk repository must be public for this to work.
+- Packaged installations check the latest stable GitHub release at each start after a private-repository token is configured from the tray. A newer setup program is installed only after its SHA-256 matches the release metadata.
 
 ## Install the packaged application
 
 1. Download and run `TailDesk-Setup-<version>.exe` from the [latest GitHub release](https://github.com/budgearoo2/Taildesk/releases/latest). It installs TailDesk with its runtime and dependencies, so Python does not need to be installed separately. Choose whether it should start when you sign in to Windows.
 2. On first launch, create the TailDesk admin password.
-3. Automatic updates work once `budgearoo2/Taildesk` is public. If the repository is private, TailDesk still runs; install future releases manually by running their setup executable.
+3. To enable automatic updates, open the local tray menu and choose **Configure GitHub updates**. Create a fine-grained personal access token restricted to `budgearoo2/Taildesk` with **Contents: Read-only** access. TailDesk verifies it against GitHub, then encrypts it with Windows DPAPI for the current Windows account. You can revoke the token or remove it from the tray menu later.
 
 ## Run from source for development
 
@@ -67,11 +67,11 @@ Remove-NetFirewallRule -DisplayName "TailDesk (Tailnet only)"
 - The connection is optimized for a responsive control session, not high-frame-rate video. Increase the frame-rate cap or JPEG quality in Settings if the host and network can keep up. Tile updates lower bandwidth for mostly stationary screens, while moving content still needs frequent full-screen capture and comparison.
 - Mac browsers require a user gesture before playing remote audio; click **Enable remote sound** after connecting. Remote audio requires the signed virtual audio driver to be installed on the host.
 - Windows applications explicitly pinned to a physical output device in Volume Mixer may continue playing there while connected. Set those applications to the virtual speaker if they do not follow the system default.
-- Automatic release checks use GitHub's public release API; they cannot access releases while the TailDesk repository is private.
+- Automatic release checks for this private repository require a fine-grained, repository-only, read-only GitHub token configured from the local tray. Without one, TailDesk runs normally but skips update checks.
 
 ## Configuration and logs
 
-Settings, generated secret key, and password hash: `%APPDATA%\TailDesk\settings.json`. The admin password itself is never stored there; TailDesk stores a random salt and a PBKDF2-HMAC-SHA256 hash.
+Settings, generated secret key, password salt, and password hash: `%APPDATA%\TailDesk\settings.json`. The admin password itself is never stored there; TailDesk stores a random salt and a PBKDF2-HMAC-SHA256 hash. The encrypted update token is stored separately as `%APPDATA%\TailDesk\github-token.dpapi`; only the same Windows account can decrypt it.
 
 TailDesk temporarily saves the prior Windows output endpoints in `%APPDATA%\TailDesk\audio-routing.json` while installing the virtual audio device or redirecting a connected session. It clears the active snapshot after restoring the prior endpoints.
 

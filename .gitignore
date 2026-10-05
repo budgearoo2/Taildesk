@@ -6,3 +6,13 @@ venv/
 dist/
 build/
 *.spec
+.env
+.env.*
+!.env.example
+settings.json
+audio-routing.json
+github-token.dpapi
+*.pem
+*.pfx
+*.key
+transfers/

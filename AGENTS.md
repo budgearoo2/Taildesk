@@ -6,4 +6,4 @@ Keep the default listener bound to the Tailnet IPv4 address only. Do not add rou
 
 Keep the update pipeline documented in `UPDATE_PIPELINE.md` so it remains with the project across ChatGPT sessions.
 
-The Windows release setup must bundle the host runtime and packages, provide a sign-in startup choice, and preserve `%APPDATA%\TailDesk` and `%USERPROFILE%\Downloads\TailDesk` when updating. Auto-update reads public GitHub releases and validates the setup asset digest before installing. Do not embed credentials in the client.
+The Windows release setup must bundle the host runtime and packages, provide a sign-in startup choice, and preserve `%APPDATA%\TailDesk` and `%USERPROFILE%\Downloads\TailDesk` when updating. Auto-update reads GitHub releases with a repository-only read token encrypted by Windows DPAPI, and validates the setup asset digest before installing. Do not embed credentials in the client or expose them through remote web settings.

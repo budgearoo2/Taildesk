@@ -22,6 +22,7 @@ def create_tray(
     connected: Callable[[], bool],
     on_quit: Callable[[], None],
     on_install_audio: Callable[[], None],
+    on_configure_updates: Callable[[], None],
 ):
     icon = pystray.Icon(
         "TailDesk",
@@ -29,6 +30,7 @@ def create_tray(
         "TailDesk — disconnected",
         pystray.Menu(
             pystray.MenuItem("Open TailDesk settings", lambda icon, item: on_open(), default=True),
+            pystray.MenuItem("Configure GitHub updates", lambda icon, item: on_configure_updates()),
             pystray.MenuItem("Install virtual audio device", lambda icon, item: on_install_audio()),
             pystray.MenuItem("Quit TailDesk", lambda icon, item: (on_quit(), icon.stop())),
         ),

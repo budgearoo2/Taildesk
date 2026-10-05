@@ -18,7 +18,7 @@ from taildesk.server import create_app, find_tailscale_ipv4
 from taildesk.startup import set_startup
 from taildesk.tray import create_tray
 from taildesk.tailscale_serve import configure_https
-from taildesk.updater import check_startup_update
+from taildesk.updater import check_startup_update, configure_updates
 
 APP_NAME = "TailDesk"
 LOG = logging.getLogger(APP_NAME)
@@ -121,6 +121,7 @@ def main() -> int:
         connected=lambda: bool(connection_state.connected),
         on_quit=connection_state.disconnect,
         on_install_audio=AudioRouter.open_driver_setup,
+        on_configure_updates=configure_updates,
     )
     if "--minimized" not in sys.argv:
         webbrowser.open(local_url)
