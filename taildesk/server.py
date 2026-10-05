@@ -34,6 +34,22 @@ pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0
 
 
+def _pointer_position(data: dict[str, Any]) -> tuple[int, int]:
+    """Map normalized browser coordinates to the current host input surface."""
+    try:
+        x_ratio = float(data.get("x", 0))
+        y_ratio = float(data.get("y", 0))
+    except (TypeError, ValueError):
+        abort(400)
+    if not (0 <= x_ratio <= 1 and 0 <= y_ratio <= 1):
+        abort(400)
+    screen_width, screen_height = pyautogui.size()
+    return (
+        round(x_ratio * max(0, screen_width - 1)),
+        round(y_ratio * max(0, screen_height - 1)),
+    )
+
+
 class ConnectionState:
     def __init__(self, display: DisplayController):
         self.display = display
@@ -246,18 +262,14 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
         data = request.get_json(silent=True) or {}
         kind = data.get("kind")
         if kind == "move":
-            screen_width, screen_height = pyautogui.size()
-            x = max(0, min(screen_width - 1, int(data.get("x", 0))))
-            y = max(0, min(screen_height - 1, int(data.get("y", 0))))
+            x, y = _pointer_position(data)
             pyautogui.moveTo(x, y)
         elif kind == "click":
             button = data.get("button", "left")
             if button not in {"left", "right", "middle"}:
                 abort(400)
             if "x" in data and "y" in data:
-                screen_width, screen_height = pyautogui.size()
-                x = max(0, min(screen_width - 1, int(data["x"])))
-                y = max(0, min(screen_height - 1, int(data["y"])))
+                x, y = _pointer_position(data)
                 pyautogui.moveTo(x, y)
             pyautogui.click(button=button)
         elif kind in {"down", "up"}:

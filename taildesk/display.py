@@ -8,6 +8,37 @@ import threading
 LOG = logging.getLogger("TailDesk.display")
 
 
+def _enable_process_dpi_awareness() -> None:
+    """Keep screen capture and injected pointer coordinates in physical pixels."""
+    if os.name != "nt":
+        return
+    try:
+        set_context = ctypes.windll.user32.SetProcessDpiAwarenessContext
+        set_context.argtypes = [ctypes.c_void_p]
+        set_context.restype = ctypes.c_bool
+        if set_context(ctypes.c_void_p(-4)):  # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+            return
+    except (AttributeError, OSError):
+        pass
+    try:
+        set_awareness = ctypes.windll.shcore.SetProcessDpiAwareness
+        set_awareness.argtypes = [ctypes.c_int]
+        set_awareness.restype = ctypes.c_long
+        if set_awareness(2) == 0:  # PROCESS_PER_MONITOR_DPI_AWARE
+            return
+    except (AttributeError, OSError):
+        pass
+    try:
+        if ctypes.windll.user32.SetProcessDPIAware():
+            return
+    except (AttributeError, OSError):
+        pass
+    LOG.warning("Could not set process DPI awareness; pointer scaling may be inaccurate on DPI-scaled displays")
+
+
+_enable_process_dpi_awareness()
+
+
 class POINTL(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 

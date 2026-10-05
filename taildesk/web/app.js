@@ -122,10 +122,11 @@
 
   function screenPoint(event) {
     const box = desktop.getBoundingClientRect();
-    const ratio = window.devicePixelRatio || 1;
+    const x = box.width ? (event.clientX - box.left) / box.width : 0;
+    const y = box.height ? (event.clientY - box.top) / box.height : 0;
     return {
-      x: Math.round(((event.clientX - box.left) / box.width) * window.innerWidth * ratio),
-      y: Math.round(((event.clientY - box.top) / box.height) * Math.max(360, (window.innerHeight - 48) * ratio)),
+      x: Math.max(0, Math.min(1, x)),
+      y: Math.max(0, Math.min(1, y)),
     };
   }
 

@@ -4,7 +4,7 @@ TailDesk is an early Windows 11 Home remote-control host. It serves an authentic
 
 ## Current features
 
-- Live host screen in a browser, keyboard and mouse forwarding, and a responsive host display mode.
+- Live host screen in a browser, keyboard and mouse forwarding, and a responsive host display mode. Pointer positions are mapped across the visible desktop and the host process uses per-monitor DPI awareness to keep pointer input aligned with captured pixels.
 - The original display mode is saved before the first resolution change and restored on explicit disconnect, a 12-second lost-client timeout, sign-out, or app shutdown.
 - Clipboard text sync in both directions. Browsers permit automatic clipboard access on HTTPS. The direct Tailnet HTTP address uses a manual copy/paste panel where browser policy blocks clipboard access.
 - Upload to and download from a dedicated host transfer folder. Uploads are limited to 256 MB and stored by sanitized basename.
