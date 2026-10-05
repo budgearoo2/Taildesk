@@ -1,0 +1,7 @@
+Flask>=3.0,<4
+mss>=9,<11
+Pillow>=10,<13
+PyAutoGUI>=0.9.54,<1
+Pyperclip>=1.9,<2
+pystray>=0.19,<1
+waitress>=3,<4

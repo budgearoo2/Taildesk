@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TailDesk</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header>
+    <strong>TailDesk</strong>
+    <span id="connection" class="connection">Disconnected</span>
+    <span class="spacer"></span>
+    <button id="fullscreen">Fullscreen</button>
+    <button id="clipboard">Clipboard</button>
+    <button id="files-toggle">Files</button>
+    <button id="settings-toggle">Settings</button>
+    <button id="sign-out" class="quiet">Sign out</button>
+  </header>
+  <main>
+    <img id="desktop" alt="Remote Windows desktop" draggable="false" tabindex="0">
+    <section id="clipboard-fallback" class="clipboard-fallback hidden">
+      <label for="clipboard-text">Clipboard text</label>
+      <textarea id="clipboard-text" rows="4"></textarea>
+      <button id="copy-fallback">Copy to laptop clipboard</button>
+      <button id="send-fallback" class="quiet">Send to host</button>
+    </section>
+  </main>
+
+  <section id="login" class="overlay">
+    <div class="card">
+      <h1>Sign in to the host</h1>
+      <p>TailDesk can control this PC. Sign in only from a device you trust on your Tailnet.</p>
+      <form id="login-form">
+        <label for="password">Admin password</label>
+        <input id="password" type="password" autocomplete="current-password" required>
+        <button>Connect</button>
+      </form>
+      <p id="login-error" class="error" aria-live="polite"></p>
+    </div>
+  </section>
+
+  <aside id="files" class="panel hidden">
+    <div class="panel-heading"><h2>File transfer</h2><button id="files-close" class="quiet">Close</button></div>
+    <p>Uploads are saved in the host transfer folder. Maximum upload size: 256 MB.</p>
+    <label for="upload">Upload from this device</label>
+    <input id="upload" type="file" multiple>
+    <div id="file-list"></div>
+  </aside>
+
+  <section id="settings" class="overlay hidden">
+    <div class="card settings-card">
+      <div class="panel-heading"><h2>Host settings</h2><button id="settings-close" class="quiet">Close</button></div>
+      <label for="bind-host">Bind address</label>
+      <input id="bind-host" autocomplete="off">
+      <p class="hint">“auto” binds to the Tailnet IPv4 address. “127.0.0.1” allows this PC only. A specific IPv4 address can bind to one local interface.</p>
+      <div class="columns">
+        <div><label for="port">Port</label><input id="port" type="number" min="1024" max="65535"></div>
+        <div><label for="fps">Frame rate</label><input id="fps" type="number" min="1" max="20"></div>
+        <div><label for="quality">JPEG quality</label><input id="quality" type="number" min="25" max="90"></div>
+      </div>
+      <label for="transfer-folder">Transfer folder</label>
+      <input id="transfer-folder" autocomplete="off">
+      <label class="check"><input id="clipboard-enabled" type="checkbox"> Enable clipboard sync</label>
+      <label class="check"><input id="tailscale-https" type="checkbox"> Enable private HTTPS via Tailscale Serve (recommended for automatic clipboard sync)</label>
+      <p id="secure-url" class="hint"></p>
+      <label class="check"><input id="startup" type="checkbox"> Start TailDesk when I sign in to Windows</label>
+      <p class="hint">Changes to the bind address or port need an app restart. HTTPS through Tailscale Serve uses a private Tailnet URL and enables automatic browser clipboard access. Direct Tailnet IPv4 HTTP remains available with manual clipboard controls.</p>
+      <button id="settings-save">Save settings</button>
+    </div>
+  </section>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+name: Publish TailDesk release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - name: Check out the pushed source
+        uses: actions/checkout@v7
+
+      - name: Package source and publish a versioned release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = "0.1.$env:GITHUB_RUN_NUMBER"
+          Set-Content -Path .\taildesk\__init__.py -Value "__version__ = `"$version`"" -Encoding utf8
+          New-Item -ItemType Directory -Path .\dist -Force | Out-Null
+          $archive = ".\dist\TailDesk-$version.zip"
+          Compress-Archive -Path .\remote_desktop_connection.py, .\taildesk, .\requirements.txt, .\README.md, .\UPDATE_PIPELINE.md, .\AGENTS.md -DestinationPath $archive -Force
+          gh release create "v$version" $archive --target $env:GITHUB_SHA --title "TailDesk $version" --generate-notes
