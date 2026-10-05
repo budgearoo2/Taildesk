@@ -14,23 +14,30 @@ TailDesk is an early Windows 11 Home remote-control host. It serves an authentic
 - Tray icon switches between disconnected and connected colors; its menu opens the local admin page, starts the one-time virtual audio driver setup, or exits the host.
 - Settings page can change port, bind address, maximum frame rate, image quality, clipboard, transfer folder, and Windows sign-in startup behavior.
 - A 14-character minimum admin password is required on first launch. Only a salted PBKDF2 hash is stored in the app settings.
+- The Windows setup executable includes TailDesk and its Python runtime/packages. Its startup checkbox controls whether TailDesk runs when that Windows user signs in.
+- Packaged installations check the latest stable public GitHub release at each start and install a newer setup program only after its SHA-256 matches the release metadata. The TailDesk repository must be public for this to work.
 
-## Requirements and first launch
+## Install the packaged application
 
-1. Install 64-bit Python 3.11 or later on the host PC.
-2. Open PowerShell in this folder and install dependencies:
+1. Download and run `TailDesk-Setup-<version>.exe` from the [latest GitHub release](https://github.com/budgearoo2/Taildesk/releases/latest). It installs TailDesk with its runtime and dependencies, so Python does not need to be installed separately. Choose whether it should start when you sign in to Windows.
+2. On first launch, create the TailDesk admin password.
+3. Automatic updates work once `budgearoo2/Taildesk` is public. If the repository is private, TailDesk still runs; install future releases manually by running their setup executable.
+
+## Run from source for development
+
+Install 64-bit Python 3.11 or later, then open PowerShell in this folder and install dependencies:
 
    ```powershell
    python -m pip install -r requirements.txt
    ```
 
-3. Ensure Tailscale is installed, connected, and signed in on the host. Run:
+Ensure Tailscale is installed, connected, and signed in on the host. Run:
 
    ```powershell
    python .\remote_desktop_connection.py
    ```
 
-4. Set an admin password in the first-run dialog. The app opens the admin page. From another Tailnet device, open `http://<host-tailnet-ipv4>:8765/` and sign in with that password. Find the host address with `tailscale ip -4`.
+Then set an admin password in the first-run dialog. The app opens the admin page. From another Tailnet device, open `http://<host-tailnet-ipv4>:8765/` and sign in with that password. Find the host address with `tailscale ip -4`.
 
 ### Remote audio setup
 
@@ -38,7 +45,7 @@ TailDesk includes the signed **Virtual Audio Driver** release 25.7.14 from [Virt
 
 By default, TailDesk also asks Tailscale Serve to provide a private HTTPS URL on port `8443` pointing to its local web server. Tailscale Serve may ask a Tailnet administrator to enable HTTPS certificates the first time. When it succeeds, the tray opens that HTTPS URL, which removes the browser's insecure-context restriction on clipboard APIs; browser permission rules still apply. The `http://100.x.x.x:8765/` URL remains available when you need direct IP access; ordinary HTTP pages use the manual clipboard controls. The HTTPS link uses the host's Tailnet DNS name and is available only inside your Tailnet. See [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve) and the [Serve CLI reference](https://tailscale.com/docs/reference/tailscale-cli/serve).
 
-The default bind setting is `auto`: it binds only to the IPv4 address returned by `tailscale ip -4`; if Tailscale is unavailable, it falls back to localhost and remote access is disabled. The app does not offer a wildcard bind. The port defaults to `8765`. The first-run setting enables Windows sign-in startup; it can be disabled in Settings. The transfer folder defaults to `Downloads\TailDesk`.
+The default bind setting is `auto`: it binds only to the IPv4 address returned by `tailscale ip -4`; if Tailscale is unavailable, it falls back to localhost and remote access is disabled. The app does not offer a wildcard bind. The port defaults to `8765`. The setup checkbox controls Windows sign-in startup; it can also be changed in Settings. The transfer folder defaults to `Downloads\TailDesk`.
 
 The app grants full desktop control. Keep the address on your Tailnet, use a unique strong password, and do not expose the app through router port forwarding or Tailscale Funnel. Tailscale Serve is private to the Tailnet and uses an automatically provisioned TLS certificate; the app still has its own login. Windows may require an inbound firewall rule for direct IPv4 access on the Tailnet interface. If needed, run this in an elevated PowerShell window:
 
@@ -60,11 +67,11 @@ Remove-NetFirewallRule -DisplayName "TailDesk (Tailnet only)"
 - The connection is optimized for a responsive control session, not high-frame-rate video. Increase the frame-rate cap or JPEG quality in Settings if the host and network can keep up. Tile updates lower bandwidth for mostly stationary screens, while moving content still needs frequent full-screen capture and comparison.
 - Mac browsers require a user gesture before playing remote audio; click **Enable remote sound** after connecting. Remote audio requires the signed virtual audio driver to be installed on the host.
 - Windows applications explicitly pinned to a physical output device in Volume Mixer may continue playing there while connected. Set those applications to the virtual speaker if they do not follow the system default.
-- Python and its dependencies must be installed on the host. A packaged installer is a later release task.
+- Automatic release checks use GitHub's public release API; they cannot access releases while the TailDesk repository is private.
 
 ## Configuration and logs
 
-Settings and password hash: `%APPDATA%\TailDesk\settings.json`.
+Settings, generated secret key, and password hash: `%APPDATA%\TailDesk\settings.json`. The admin password itself is never stored there; TailDesk stores a random salt and a PBKDF2-HMAC-SHA256 hash.
 
 TailDesk temporarily saves the prior Windows output endpoints in `%APPDATA%\TailDesk\audio-routing.json` while installing the virtual audio device or redirecting a connected session. It clears the active snapshot after restoring the prior endpoints.
 

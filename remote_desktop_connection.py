@@ -18,6 +18,7 @@ from taildesk.server import create_app, find_tailscale_ipv4
 from taildesk.startup import set_startup
 from taildesk.tray import create_tray
 from taildesk.tailscale_serve import configure_https
+from taildesk.updater import check_startup_update
 
 APP_NAME = "TailDesk"
 LOG = logging.getLogger(APP_NAME)
@@ -58,6 +59,9 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if os.name != "nt":
         raise SystemExit("TailDesk currently runs on Windows 11.")
+
+    if check_startup_update():
+        return 0
 
     store = ConfigStore()
     if not store.has_password() and not make_password(store):

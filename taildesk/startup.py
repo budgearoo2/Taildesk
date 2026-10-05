@@ -17,8 +17,11 @@ def set_startup(enabled: bool) -> None:
         pythonw = executable.with_name("pythonw.exe")
         if pythonw.exists():
             executable = pythonw
-    script = Path(__file__).resolve().parents[1] / "remote_desktop_connection.py"
-    command = f'"{executable}" "{script}" --minimized'
+    if getattr(sys, "frozen", False):
+        command = f'"{executable}" --minimized'
+    else:
+        script = Path(__file__).resolve().parents[1] / "remote_desktop_connection.py"
+        command = f'"{executable}" "{script}" --minimized'
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
         if enabled:
             winreg.SetValueEx(key, "TailDesk", 0, winreg.REG_SZ, command)

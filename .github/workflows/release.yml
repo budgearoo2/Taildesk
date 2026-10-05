@@ -15,14 +15,33 @@ jobs:
       - name: Check out the pushed source
         uses: actions/checkout@v7
 
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Build the self-contained Windows application and setup program
+        shell: pwsh
+        run: |
+          $version = "0.1.$env:GITHUB_RUN_NUMBER"
+          @"
+          """TailDesk host implementation."""
+
+          __version__ = "$version"
+          "@ | Set-Content -Path .\taildesk\__init__.py -Encoding utf8
+          python -m pip install --upgrade pip
+          python -m pip install -r .\requirements.txt pyinstaller
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --name TailDesk --distpath .\dist\host --workpath .\build\host --collect-all soundcard --collect-all pycaw --collect-all comtypes --collect-all pystray --add-data ".\taildesk\web;taildesk\web" --add-data ".\taildesk\third_party;taildesk\third_party" .\remote_desktop_connection.py
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name TailDesk-Setup --distpath .\dist\installer --workpath .\build\installer --add-data ".\dist\host\TailDesk;payload\TailDesk" .\installer.py
+          Copy-Item .\dist\installer\TailDesk-Setup.exe ".\dist\TailDesk-Setup-$version.exe"
+
       - name: Package source and publish a versioned release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $version = "0.1.$env:GITHUB_RUN_NUMBER"
-          Set-Content -Path .\taildesk\__init__.py -Value "__version__ = `"$version`"" -Encoding utf8
           New-Item -ItemType Directory -Path .\dist -Force | Out-Null
           $archive = ".\dist\TailDesk-$version.zip"
-          Compress-Archive -Path .\remote_desktop_connection.py, .\taildesk, .\requirements.txt, .\README.md, .\UPDATE_PIPELINE.md, .\AGENTS.md, .\THIRD_PARTY_NOTICES.md -DestinationPath $archive -Force
-          gh release create "v$version" $archive --target $env:GITHUB_SHA --title "TailDesk $version" --generate-notes
+          Compress-Archive -Path .\remote_desktop_connection.py, .\installer.py, .\taildesk, .\requirements.txt, .\README.md, .\UPDATE_PIPELINE.md, .\AGENTS.md, .\THIRD_PARTY_NOTICES.md -DestinationPath $archive -Force
+          gh release create "v$version" $archive ".\dist\TailDesk-Setup-$version.exe" --target $env:GITHUB_SHA --title "TailDesk $version" --generate-notes

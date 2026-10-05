@@ -19,7 +19,7 @@ DEFAULTS: dict[str, Any] = {
     "jpeg_quality": 65,
     "clipboard_enabled": True,
     "transfer_folder": str(DEFAULT_TRANSFER_DIR),
-    "startup": True,
+    "startup": False,
     "tailscale_https": True,
     "tailscale_https_port": None,
     "secret_key": "",
