@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.2
+
+- Show the running host version in the remote masthead and add a toggleable Stats for nerds overlay with measured image payload bitrate, updated-frame rate, screen poll rate, frame request time, host resolution, browser viewport, and adaptive stream settings.
+- Cache rejected or substituted host display-size requests while the requested and actual modes are unchanged, preventing heartbeat retries from repeatedly resetting Windows hover and popup state.
+- Add regression coverage for rejected display modes and browser stream statistics.
+
 ## 1.0.1
 
 - Avoid reapplying the host display mode on every browser heartbeat when the requested resolution is already active. This prevents needless Windows display resets that can dismiss taskbar flyouts and hover UI; native display restoration on disconnect is unchanged.

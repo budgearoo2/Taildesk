@@ -6,8 +6,9 @@ from taildesk.display import DisplayController
 
 
 class FakeDisplayApi:
-    def __init__(self, width: int, height: int) -> None:
+    def __init__(self, width: int, height: int, result: int = 0) -> None:
         self.current = (width, height)
+        self.result = result
         self.change_calls: list[tuple[int, int]] = []
 
     def EnumDisplaySettingsW(self, _device, _mode, destination) -> int:
@@ -17,9 +18,11 @@ class FakeDisplayApi:
 
     def ChangeDisplaySettingsW(self, requested, _flags) -> int:
         mode = requested._obj
-        self.current = (mode.width, mode.height)
-        self.change_calls.append(self.current)
-        return 0
+        requested_size = (mode.width, mode.height)
+        self.change_calls.append(requested_size)
+        if self.result == 0:
+            self.current = requested_size
+        return self.result
 
 
 class DisplayControllerTests(unittest.TestCase):
@@ -46,6 +49,21 @@ class DisplayControllerTests(unittest.TestCase):
         display.restore()
 
         self.assertEqual(api.change_calls, [])
+
+    def test_rejected_browser_size_is_not_retried_on_every_heartbeat(self) -> None:
+        api = FakeDisplayApi(1920, 1080, result=-2)
+        display = DisplayController()
+        display._api = lambda: api
+
+        self.assertFalse(display.resize(1536, 864))
+        self.assertFalse(display.resize(1536, 864))
+        self.assertFalse(display.resize(1536, 864))
+        self.assertEqual(api.change_calls, [(1536, 864)])
+
+        # A real host-mode change makes a retry useful again.
+        api.current = (1600, 900)
+        self.assertFalse(display.resize(1536, 864))
+        self.assertEqual(api.change_calls, [(1536, 864), (1536, 864)])
 
 
 if __name__ == "__main__":

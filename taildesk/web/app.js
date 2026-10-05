@@ -3,6 +3,7 @@
   const desktop = $("desktop");
   const screenContext = desktop.getContext("2d", { alpha: false });
   const clipboardText = $("clipboard-text");
+  const streamStats = window.TailDeskStreamStats.create();
   const appleKeyboard = /Mac|iPhone|iPad/.test(navigator.platform || "");
   let active = false;
   let frameTimer;
@@ -31,6 +32,27 @@
   let audioNextTime = 0;
   let lastHostClipboard = null;
   let toastTimer;
+  let latestStats = null;
+
+  function renderStats(metrics = latestStats) {
+    if (!metrics) return;
+    const viewport = targetSize();
+    $("stats-bitrate").textContent = window.TailDeskStreamStats.formatBitrate(metrics.receiveBitsPerSecond);
+    $("stats-fps").textContent = `${metrics.updatedFps.toFixed(1)} fps (${metrics.pollFps.toFixed(1)} polls/s)`;
+    $("stats-latency").textContent = metrics.averageFrameMs ? `${metrics.averageFrameMs.toFixed(0)} ms` : "—";
+    $("stats-resolution").textContent = desktop.width && desktop.height
+      ? `${desktop.width} × ${desktop.height}` : "Waiting for a frame";
+    $("stats-viewport").textContent = `${viewport.width} × ${viewport.height}`;
+    $("stats-stream").textContent = `${adaptiveFps.toFixed(1)} fps adaptive / ${fps} fps cap · JPEG ${adaptiveQuality}%`;
+  }
+
+  $("stats-toggle").addEventListener("click", () => {
+    const overlay = $("stats-overlay");
+    const open = overlay.classList.contains("hidden");
+    overlay.classList.toggle("hidden", !open);
+    $("stats-toggle").setAttribute("aria-pressed", String(open));
+    if (open) renderStats();
+  });
 
   async function api(path, options = {}) {
     const response = await fetch(path, { cache: "no-store", ...options });
@@ -66,11 +88,14 @@
   async function connect() {
     try {
       const state = await api("/api/state");
+      if (state.version) $("version").textContent = `v${state.version}`;
       fps = state.settings.fps;
       configuredQuality = state.settings.jpeg_quality;
       active = true;
       adaptiveFps = Math.min(fps, 12);
       adaptiveQuality = configuredQuality;
+      streamStats.reset();
+      latestStats = streamStats.snapshot();
       forceFullFrame = true;
       $("login").classList.add("hidden");
       $("sign-out").classList.toggle("hidden", !!state.local_access);
@@ -225,6 +250,8 @@
   function refreshFrame() {
     if (!active) return;
     const started = performance.now();
+    let responseBytes = 0;
+    let updatedFrame = false;
     const url = `/api/screen?t=${Date.now()}&q=${adaptiveQuality}${forceFullFrame ? "&full=1" : ""}`;
     forceFullFrame = false;
     fetch(url, { cache: "no-store" }).then(async (response) => {
@@ -235,6 +262,7 @@
       const type = response.headers.get("content-type") || "";
       if (type.includes("application/vnd.taildesk.tiles")) {
         const bytes = await response.arrayBuffer();
+        responseBytes = bytes.byteLength;
         const update = window.TailDeskScreenProtocol.decodeDeltaFrame(bytes);
         if (desktop.width !== update.width || desktop.height !== update.height) {
           forceFullFrame = true;
@@ -245,14 +273,18 @@
           screenContext.drawImage(bitmap, tile.x, tile.y, tile.width, tile.height);
           bitmap.close();
         }
+        updatedFrame = update.tiles.length > 0;
       } else {
-        const bitmap = await createImageBitmap(new Blob([await response.arrayBuffer()], { type: "image/jpeg" }));
+        const bytes = await response.arrayBuffer();
+        responseBytes = bytes.byteLength;
+        const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
         if (desktop.width !== bitmap.width || desktop.height !== bitmap.height) {
           desktop.width = bitmap.width;
           desktop.height = bitmap.height;
         }
         screenContext.drawImage(bitmap, 0, 0);
         bitmap.close();
+        updatedFrame = true;
       }
     }).catch((error) => {
       forceFullFrame = true;
@@ -260,6 +292,8 @@
     }).finally(() => {
       if (!active) return;
       const elapsed = performance.now() - started;
+      latestStats = streamStats.record({ byteLength: responseBytes, updated: updatedFrame, elapsedMs: elapsed });
+      if (!$("stats-overlay").classList.contains("hidden")) renderStats(latestStats);
       const adjusted = window.TailDeskAdaptiveStream.adjust({
         targetFps: fps,
         fps: adaptiveFps,

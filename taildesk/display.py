@@ -71,6 +71,9 @@ class DisplayController:
         self._lock = threading.RLock()
         self._original: DEVMODEW | None = None
         self._changed = False
+        self._last_request: tuple[int, int] | None = None
+        self._last_observed: tuple[int, int] | None = None
+        self._last_result = False
 
     @staticmethod
     def _api():
@@ -89,34 +92,52 @@ class DisplayController:
                 return False
             if self._original is None:
                 self._original = DEVMODEW.from_buffer_copy(current)
-            # Heartbeats repeat the current browser size. Reapplying an
-            # unchanged display mode needlessly disturbs Windows shell hover
-            # tracking and can dismiss taskbar flyouts and tooltips.
-            if current.width == width and current.height == height:
+            current_size = (current.width, current.height)
+            requested = (width, height)
+            if current_size == requested:
+                self._last_request = requested
+                self._last_observed = current_size
+                self._last_result = True
                 return True
+            # The display driver may reject a browser's exact dimensions or
+            # substitute a nearby supported mode. Heartbeats retry the same
+            # request every few seconds, so cache the attempt until the
+            # request or observed host mode changes. Reapplying it can reset
+            # shell hover state and dismiss menus.
+            if requested == self._last_request and current_size == self._last_observed:
+                return self._last_result
             target = DEVMODEW.from_buffer_copy(current)
             target.width, target.height = width, height
             target.fields = 0x00080000 | 0x00100000  # DM_PELSWIDTH | DM_PELSHEIGHT
             # CDS_FULLSCREEN applies the mode for the current session only.
             result = api.ChangeDisplaySettingsW(ctypes.byref(target), 0x00000004)
-            if result == 0:
+            applied = result == 0
+            if applied:
                 self._changed = True
-                return True
-            # Keep the original mode armed for restoration if a later resize
-            # request is rejected after an earlier mode change succeeded.
-            return False
+            observed = DEVMODEW()
+            observed.size = ctypes.sizeof(DEVMODEW)
+            if api.EnumDisplaySettingsW(None, -1, ctypes.byref(observed)):
+                self._last_observed = (observed.width, observed.height)
+            else:
+                self._last_observed = current_size
+            self._last_request = requested
+            self._last_result = applied
+            return applied
 
     def restore(self) -> None:
         api = self._api()
         with self._lock:
-            if api is None or not self._changed:
+            if api is None:
                 return
             try:
                 # Reapplying the captured driver mode restores the native mode.
-                if self._original is not None:
+                if self._changed and self._original is not None:
                     api.ChangeDisplaySettingsW(ctypes.byref(self._original), 0x00000004)
             except Exception:
                 LOG.exception("Could not restore the original display resolution")
             finally:
                 self._original = None
                 self._changed = False
+                self._last_request = None
+                self._last_observed = None
+                self._last_result = False

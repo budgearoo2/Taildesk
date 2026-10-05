@@ -9,10 +9,12 @@
 <body>
   <header>
     <strong>TailDesk</strong>
+    <span id="version" class="version" title="Version of the TailDesk host">v{{ version }}</span>
     <span id="connection" class="connection">Disconnected</span>
     <span class="spacer"></span>
     <button id="fullscreen">Fullscreen</button>
     <button id="audio-toggle" class="quiet">Install VB-CABLE</button>
+    <button id="stats-toggle" class="quiet" aria-controls="stats-overlay" aria-pressed="false">Stats</button>
     <button id="clipboard" aria-controls="clipboard-fallback" aria-expanded="false">Clipboard</button>
     <button id="files-toggle">Files</button>
     <button id="settings-toggle">Settings</button>
@@ -20,6 +22,16 @@
   </header>
   <main>
     <canvas id="desktop" aria-label="Remote Windows desktop" tabindex="0"></canvas>
+    <aside id="stats-overlay" class="stats-overlay hidden" aria-label="Stats for nerds" aria-live="off">
+      <strong>Stats for nerds</strong>
+      <div>Image data: <span id="stats-bitrate">—</span></div>
+      <div>Updated frames: <span id="stats-fps">—</span></div>
+      <div>Frame time: <span id="stats-latency">—</span></div>
+      <div>Host resolution: <span id="stats-resolution">—</span></div>
+      <div>Browser viewport: <span id="stats-viewport">—</span></div>
+      <div>Stream: <span id="stats-stream">—</span></div>
+      <small>Payload estimate; excludes HTTP and Tailnet overhead.</small>
+    </aside>
     <section id="clipboard-fallback" class="clipboard-fallback hidden">
       <div class="clipboard-heading">
         <label for="clipboard-text">Host clipboard text</label>
@@ -79,6 +91,7 @@
   </section>
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="{{ url_for('static', filename='adaptive_stream.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='stream_stats.js') }}" defer></script>
   <script src="{{ url_for('static', filename='input_queue.js') }}" defer></script>
   <script src="{{ url_for('static', filename='screen_protocol.js') }}" defer></script>
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>

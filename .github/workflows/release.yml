@@ -65,7 +65,8 @@ jobs:
           node --check .\taildesk\web\screen_protocol.js
           node --check .\taildesk\web\adaptive_stream.js
           node --check .\taildesk\web\input_queue.js
-          node --test .\tests\adaptive_stream.test.cjs .\tests\input_queue.test.cjs .\tests\screen_protocol.test.cjs
+          node --check .\taildesk\web\stream_stats.js
+          node --test .\tests\adaptive_stream.test.cjs .\tests\input_queue.test.cjs .\tests\screen_protocol.test.cjs .\tests\stream_stats.test.cjs
 
       - name: Read version and reject duplicate releases
         id: version
