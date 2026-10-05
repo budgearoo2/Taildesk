@@ -38,7 +38,11 @@ def set_startup(install_dir: Path, enabled: bool) -> None:
 def wait_for_process_exit(process_id: int, timeout_seconds: int = 45) -> None:
     synchronize = 0x00100000
     kernel = ctypes.windll.kernel32
+    kernel.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
     kernel.OpenProcess.restype = ctypes.c_void_p
+    kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    kernel.WaitForSingleObject.restype = ctypes.c_ulong
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
     handle = kernel.OpenProcess(synchronize, False, process_id)
     if not handle:
         return
@@ -46,6 +50,8 @@ def wait_for_process_exit(process_id: int, timeout_seconds: int = 45) -> None:
         result = kernel.WaitForSingleObject(handle, timeout_seconds * 1000)
         if result == 0x00000102:
             raise TimeoutError("TailDesk is still closing. Run setup again after it exits.")
+        if result != 0:
+            raise ctypes.WinError()
     finally:
         kernel.CloseHandle(handle)
 
