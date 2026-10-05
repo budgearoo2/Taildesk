@@ -12,9 +12,10 @@
     <span id="connection" class="connection">Disconnected</span>
     <span class="spacer"></span>
     <button id="fullscreen">Fullscreen</button>
-    <button id="audio-toggle" class="quiet" disabled>Enable remote sound</button>
+    <button id="audio-toggle" class="quiet">Install VB-CABLE</button>
     <span id="audio-status" class="audio-status" role="status" aria-live="polite"></span>
-    <button id="clipboard">Clipboard</button>
+    <a class="audio-vendor" href="https://vb-audio.com/Cable/" target="_blank" rel="noopener">VB-Audio donationware</a>
+    <button id="clipboard" aria-controls="clipboard-fallback" aria-expanded="false">Clipboard</button>
     <button id="files-toggle">Files</button>
     <button id="settings-toggle">Settings</button>
     <button id="sign-out" class="quiet">Sign out</button>
@@ -22,7 +23,10 @@
   <main>
     <canvas id="desktop" aria-label="Remote Windows desktop" tabindex="0"></canvas>
     <section id="clipboard-fallback" class="clipboard-fallback hidden">
-      <label for="clipboard-text">Host clipboard text</label>
+      <div class="clipboard-heading">
+        <label for="clipboard-text">Host clipboard text</label>
+        <button id="clipboard-dismiss" class="quiet" aria-label="Dismiss host clipboard">&times;</button>
+      </div>
       <textarea id="clipboard-text" rows="4"></textarea>
       <button id="copy-fallback">Copy to this device</button>
       <button id="send-fallback" class="quiet">Send to host</button>

@@ -7,15 +7,15 @@ TailDesk is an early Windows 11 Home remote-control host. It serves an authentic
 - Live host screen in a browser, keyboard and mouse forwarding, and a responsive host display mode. Pointer positions are mapped across the visible desktop and the host process uses per-monitor DPI awareness to keep pointer input aligned with captured pixels. Mouse buttons stay held through pointer movement so click-and-drag text selection works; held keys send browser repeat events.
 - Screen updates use changed 128-pixel tiles when possible and adapt their polling rate to measured capture, transfer, and browser decode time. The Frame rate setting is the upper limit.
 - The original display mode is saved before the first resolution change and restored on explicit disconnect, a 12-second lost-client timeout, sign-out, or app shutdown.
-- Clipboard text sync in both directions, including Command+C/Command+V from a Mac browser. Browsers permit automatic clipboard access on HTTPS; Safari may still require a user gesture. The direct Tailnet HTTP address uses a manual copy/paste panel where browser policy blocks clipboard access.
+- Clipboard text sync in both directions, including Command+C/Command+V from a Mac browser. Browsers permit automatic clipboard access on HTTPS; Safari may still require a user gesture. The direct Tailnet HTTP address uses a manual copy/paste panel opened on demand from the masthead Clipboard button, so host clipboard updates do not cover the remote desktop.
 - Trackpad wheel deltas are forwarded to Windows as smooth wheel input, including browser-provided momentum events.
-- Remote audio switches Windows playback to a virtual speaker during the controller session, relays its 48 kHz stereo audio to the browser, and restores each prior Windows output on disconnect or timeout. Click **Enable remote sound** once per browser session to satisfy playback policies.
+- Remote audio switches Windows playback to VB-Audio's VB-CABLE during the controller session, relays its 48 kHz stereo audio to the browser, and restores each prior Windows output on disconnect or timeout. Click **Enable remote sound** once per browser session to satisfy playback policies.
 - Upload to and download from a dedicated host transfer folder. Uploads are limited to 256 MB and stored by sanitized basename.
-- Tray icon switches between disconnected and connected colors; its menu opens the local admin page, starts the one-time virtual audio driver setup, or exits the host.
+- Tray icon switches between disconnected and connected colors; its menu opens a host-local settings page without a password, configures GitHub updates, or exits the host. Tailnet browser sessions still require the admin password.
 - Settings page can change port, bind address, maximum frame rate, image quality, clipboard, transfer folder, and Windows sign-in startup behavior.
-- A 14-character minimum admin password is required on first launch. Only a salted PBKDF2 hash is stored in the app settings.
+- A 14-character minimum admin password is required on first launch for Tailnet connections. Only a salted PBKDF2 hash is stored in the app settings.
 - The Windows setup executable includes TailDesk and its Python runtime/packages. Its startup checkbox controls whether TailDesk runs when that Windows user signs in.
-- Packaged installations check the latest stable GitHub release at each start after a private-repository token is configured from the tray. A newer setup program is installed only after its SHA-256 matches the release metadata.
+- Packaged installations check the latest stable GitHub release at each start after a repository read-only token is configured from the tray. A newer setup program is installed only after its SHA-256 matches the release metadata.
 
 ## Install the packaged application
 
@@ -41,9 +41,9 @@ Then set an admin password in the first-run dialog. The app opens the admin page
 
 ### Remote audio setup
 
-TailDesk includes the signed **Virtual Audio Driver** release 25.7.14 from [VirtualDrivers](https://github.com/VirtualDrivers/Virtual-Audio-Driver/releases/tag/25.7.14). This Windows driver is separately licensed under MIT, with Microsoft Sysvad sample notices included in `taildesk/third_party/`. Driver installation needs Windows administrator approval. In the TailDesk tray menu, choose **Install virtual audio device**; in Device Manager, choose **Action > Add legacy hardware > install manually > Sound, video and game controllers > Have Disk**, then select the extracted `VirtualAudioDriver.inf`. Restart Windows if requested. TailDesk detects this virtual speaker on the next remote connection. Windows per-app output assignments can override the system default, so route those apps to **Virtual Audio Driver** in Windows Volume Mixer if their sound still plays locally.
+VB-Audio's [VB-CABLE Driver Pack 45](https://vb-audio.com/Cable/) supports Windows 11 and is supplied as donationware. The web UI and tray identify the vendor and link to its donation page. Click **Install VB-CABLE** in the web UI or choose **Install VB-CABLE audio device** in the tray menu. TailDesk downloads the unmodified package from VB-Audio's official download host and verifies its pinned SHA-256 before opening the vendor installer. Windows shows its standard administrator approval prompt; in VB-Audio's installer choose **Install Driver**. TailDesk watches the installer and reports when the device appears. VB-Audio says Windows may need a restart after installation. Windows per-app output assignments can override the system default, so route those apps to **CABLE Input (VB-Audio Virtual Cable)** in Windows Volume Mixer if their sound still plays locally.
 
-By default, TailDesk also asks Tailscale Serve to provide a private HTTPS URL on port `8443` pointing to its local web server. Tailscale Serve may ask a Tailnet administrator to enable HTTPS certificates the first time. When it succeeds, the tray opens that HTTPS URL, which removes the browser's insecure-context restriction on clipboard APIs; browser permission rules still apply. The `http://100.x.x.x:8765/` URL remains available when you need direct IP access; ordinary HTTP pages use the manual clipboard controls. The HTTPS link uses the host's Tailnet DNS name and is available only inside your Tailnet. See [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve) and the [Serve CLI reference](https://tailscale.com/docs/reference/tailscale-cli/serve).
+By default, TailDesk also asks Tailscale Serve to provide a private HTTPS URL on port `8443` pointing to its local web server. Tailscale Serve may ask a Tailnet administrator to enable HTTPS certificates the first time. Open that HTTPS URL from a remote Tailnet device to enable browser clipboard APIs; browser permission rules still apply. The `http://100.x.x.x:8765/` URL remains available when you need direct IP access; ordinary HTTP pages use the manual clipboard controls. The HTTPS link uses the host's Tailnet DNS name and is available only inside your Tailnet. See [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve) and the [Serve CLI reference](https://tailscale.com/docs/reference/tailscale-cli/serve).
 
 The default bind setting is `auto`: it binds only to the IPv4 address returned by `tailscale ip -4`; if Tailscale is unavailable, it falls back to localhost and remote access is disabled. The app does not offer a wildcard bind. The port defaults to `8765`. The setup checkbox controls Windows sign-in startup; it can also be changed in Settings. The transfer folder defaults to `Downloads\TailDesk`.
 
@@ -65,19 +65,19 @@ Remove-NetFirewallRule -DisplayName "TailDesk (Tailnet only)"
 - Display drivers can reject browser viewport resolutions. In that case the app keeps the last accepted mode and still restores the saved original mode on disconnect.
 - Clipboard browser APIs require a secure browser context for unattended synchronization. Over direct `http://100.x.x.x:8765`, use the visible manual clipboard controls.
 - The connection is optimized for a responsive control session, not high-frame-rate video. Increase the frame-rate cap or JPEG quality in Settings if the host and network can keep up. Tile updates lower bandwidth for mostly stationary screens, while moving content still needs frequent full-screen capture and comparison.
-- Mac browsers require a user gesture before playing remote audio; click **Enable remote sound** after connecting. Remote audio requires the signed virtual audio driver to be installed on the host.
+- Remote audio requires the signed VB-CABLE driver to be installed on the host. Click **Enable remote sound** after installation; Mac browsers require that user gesture before playing audio.
 - Windows applications explicitly pinned to a physical output device in Volume Mixer may continue playing there while connected. Set those applications to the virtual speaker if they do not follow the system default.
-- Automatic release checks for this private repository require a fine-grained, repository-only, read-only GitHub token configured from the local tray. Without one, TailDesk runs normally but skips update checks.
+- Automatic release checks use a fine-grained, repository-only, read-only GitHub token configured from the local tray. Without one, TailDesk runs normally but skips update checks.
 
 ## Configuration and logs
 
 Settings, generated secret key, password salt, and password hash: `%APPDATA%\TailDesk\settings.json`. The admin password itself is never stored there; TailDesk stores a random salt and a PBKDF2-HMAC-SHA256 hash. The encrypted update token is stored separately as `%APPDATA%\TailDesk\github-token.dpapi`; only the same Windows account can decrypt it.
 
-TailDesk temporarily saves the prior Windows output endpoints in `%APPDATA%\TailDesk\audio-routing.json` while installing the virtual audio device or redirecting a connected session. It clears the active snapshot after restoring the prior endpoints.
+TailDesk temporarily saves the prior Windows output endpoints in `%APPDATA%\TailDesk\audio-routing.json` while redirecting a connected session. It clears the active snapshot after restoring the prior endpoints.
 
 Host file transfer directory: `%USERPROFILE%\Downloads\TailDesk` by default.
 
-The tray icon opens the local admin page. The same settings are available from the authenticated remote browser page.
+The tray icon opens `http://127.0.0.1:<port>/`; requests from that local page skip the password screen. Remote Tailnet browser settings remain protected by the admin password.
 
 ## Development
 

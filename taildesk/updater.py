@@ -86,7 +86,7 @@ def _request(url: str, token: str, *, accept: str = "application/vnd.github+json
 
 
 def configure_updates() -> None:
-    """Configure or remove the private-repository token from the local tray menu."""
+    """Configure or remove the repository read-only token from the local tray menu."""
     root = Tk()
     root.withdraw()
     try:

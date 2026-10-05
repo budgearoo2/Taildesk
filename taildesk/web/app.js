@@ -17,7 +17,9 @@
   let forceFullFrame = true;
   let audioContext = null;
   let audioPlaying = false;
+  let audioAvailable = false;
   let audioPollTimer;
+  let audioInstallPollTimer;
   let audioNextTime = 0;
   let lastHostClipboard = null;
   let toastTimer;
@@ -47,7 +49,7 @@
     audioPlaying = false;
     clearTimeout(audioPollTimer);
     audioContext?.suspend();
-    $("audio-toggle").textContent = "Enable remote sound";
+    $("audio-toggle").textContent = audioAvailable ? "Enable remote sound" : "Install VB-CABLE";
     $("login").classList.remove("hidden");
     $("connection").textContent = "Disconnected";
     $("connection").classList.remove("online");
@@ -61,6 +63,7 @@
       adaptiveFps = Math.min(fps, 6);
       forceFullFrame = true;
       $("login").classList.add("hidden");
+      $("sign-out").classList.toggle("hidden", !!state.local_access);
       $("connection").textContent = "Connected";
       $("connection").classList.add("online");
       await heartbeat();
@@ -76,7 +79,29 @@
 
   function updateAudioStatus(status) {
     $("audio-status").textContent = status?.message || "Remote audio is unavailable.";
-    $("audio-toggle").disabled = !status?.available;
+    audioAvailable = !!status?.available;
+    $("audio-toggle").disabled = !!status?.installing;
+    if (!audioPlaying) {
+      $("audio-toggle").textContent = audioAvailable
+        ? "Enable remote sound"
+        : (status?.installing ? "VB-CABLE installer open…" : "Install VB-CABLE");
+    }
+  }
+
+  function pollAudioDriverInstall() {
+    clearInterval(audioInstallPollTimer);
+    audioInstallPollTimer = setInterval(async () => {
+      try {
+        const state = await api("/api/state");
+        updateAudioStatus(state.audio);
+        if (state.audio?.available || !state.audio?.installing) {
+          clearInterval(audioInstallPollTimer);
+          if (state.audio?.available) toast("VB-CABLE is ready. Enable remote sound to listen.");
+        }
+      } catch (_) {
+        clearInterval(audioInstallPollTimer);
+      }
+    }, 2500);
   }
 
   async function pollAudio() {
@@ -113,6 +138,20 @@
   }
 
   $("audio-toggle").addEventListener("click", async () => {
+    if (!audioAvailable) {
+      $("audio-toggle").disabled = true;
+      try {
+        const result = await api("/api/audio/install", { method: "POST" });
+        updateAudioStatus(result.audio);
+        toast(result.message);
+        if (result.audio?.installing) pollAudioDriverInstall();
+      } catch (error) {
+        toast(error.message || "Could not open the VB-CABLE installer.");
+        const state = await api("/api/state").catch(() => null);
+        updateAudioStatus(state?.audio);
+      }
+      return;
+    }
     if (audioPlaying) {
       audioPlaying = false;
       clearTimeout(audioPollTimer);
@@ -345,18 +384,13 @@
       if (!data.text) return;
       if (data.text === lastHostClipboard) return;
       lastHostClipboard = data.text;
+      clipboardText.value = data.text;
       if (window.isSecureContext && navigator.clipboard?.writeText) {
         try {
           await navigator.clipboard.writeText(data.text);
-          $("clipboard-fallback").classList.add("hidden");
         } catch (_) {
-          clipboardText.value = data.text;
-          $("clipboard-fallback").classList.remove("hidden");
+          // Manual copy remains available from the Clipboard button.
         }
-      } else {
-        clipboardText.value = data.text;
-        $("clipboard-fallback").classList.remove("hidden");
-        toast("Host clipboard loaded; use the copy button.");
       }
     } catch (_) {}
   }
@@ -381,11 +415,22 @@
         await input("up", { key: "v" });
       }
       toast("Copied to the host clipboard.");
+      closeClipboardPanel();
     } catch (error) {
       toast(error.message);
     }
   }
-  $("clipboard").addEventListener("click", pasteToHost);
+  function closeClipboardPanel() {
+    $("clipboard-fallback").classList.add("hidden");
+    $("clipboard").setAttribute("aria-expanded", "false");
+  }
+  $("clipboard").addEventListener("click", async () => {
+    const panel = $("clipboard-fallback");
+    const open = panel.classList.contains("hidden");
+    panel.classList.toggle("hidden", !open);
+    $("clipboard").setAttribute("aria-expanded", String(open));
+    if (open) await readHostClipboard();
+  });
   $("copy-fallback").addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(clipboardText.value);
@@ -395,6 +440,7 @@
       document.execCommand("copy");
       toast("Copied to this device.");
     }
+    closeClipboardPanel();
   });
   $("send-fallback").addEventListener("click", async () => {
     try {
@@ -404,9 +450,13 @@
         body: JSON.stringify({ text: clipboardText.value }),
       });
       toast("Copied to the host clipboard.");
+      closeClipboardPanel();
     } catch (error) {
       toast(error.message);
     }
+  });
+  $("clipboard-dismiss").addEventListener("click", () => {
+    closeClipboardPanel();
   });
 
   $("fullscreen").addEventListener("click", () => document.documentElement.requestFullscreen?.());

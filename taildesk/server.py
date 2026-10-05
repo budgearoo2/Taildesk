@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import threading
 import time
+import zipfile
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,7 @@ class ConnectionState:
     def __init__(self, display: DisplayController):
         self.display = display
         self.audio = AudioRouter()
+        self.audio.driver_installed_callback = self._audio_driver_installed
         self.lock = threading.RLock()
         self.last_seen: float | None = None
         self.connected = False
@@ -66,6 +68,12 @@ class ConnectionState:
         self.previous_frame: Image.Image | None = None
         self._stop = threading.Event()
         threading.Thread(target=self._watchdog, daemon=True, name="taildesk-connection-watchdog").start()
+
+    def _audio_driver_installed(self) -> None:
+        with self.lock:
+            connected = self.connected
+        if connected:
+            self.audio.connect()
 
     def heartbeat(self, owner: str, width: int, height: int) -> bool:
         with self.lock:
@@ -209,8 +217,30 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
     )
     state: ConnectionState = app.config["TAILDESK_STATE"]
 
+    def loopback_client() -> bool:
+        # Tailscale Serve is a local reverse proxy, so deny its forwarded Tailnet requests
+        # before considering the loopback socket used by the host's own browser.
+        if request.headers.get("Tailscale-User-Login") or request.headers.get("Tailscale-User-Name"):
+            return False
+        try:
+            if not ipaddress.ip_address(request.remote_addr or "").is_loopback:
+                return False
+        except ValueError:
+            return False
+        hostname = request.host.partition(":")[0].strip("[]").casefold()
+        if hostname not in {"localhost", "127.0.0.1", "::1"}:
+            return False
+        fetch_site = request.headers.get("Sec-Fetch-Site")
+        return fetch_site in {None, "same-origin", "none"}
+
     @app.before_request
     def require_auth():
+        if loopback_client():
+            if not session.get("authenticated"):
+                session.clear()
+                session["authenticated"] = True
+                session["client_id"] = os.urandom(24).hex()
+            return None
         if request.path in {"/", "/api/login", "/static/style.css", "/static/app.js"}:
             return None
         if not session.get("authenticated"):
@@ -256,6 +286,7 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
             bind=find_tailscale_ipv4() if settings.get("bind_host") == "auto" else settings.get("bind_host"),
             port=settings.get("port", 8765),
             settings=store.public(),
+            local_access=loopback_client(),
             https_url=app.config.get("TAILDESK_SERVE_URL"),
             https_error=app.config.get("TAILDESK_SERVE_ERROR"),
             audio=state.audio.status(),
@@ -335,6 +366,15 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
         response.headers["Content-Type"] = "application/octet-stream"
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    @app.post("/api/audio/install")
+    def audio_install():
+        try:
+            message = state.audio.open_driver_setup()
+        except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as exc:
+            LOG.warning("Could not start the audio driver installation: %s", exc)
+            return jsonify(error=str(exc), audio=state.audio.status()), 400
+        return jsonify(ok=True, message=message, audio=state.audio.status())
 
     @app.post("/api/input")
     def input_event():

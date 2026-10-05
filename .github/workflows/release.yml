@@ -31,7 +31,7 @@ jobs:
           "@ | Set-Content -Path .\taildesk\__init__.py -Encoding utf8
           python -m pip install --upgrade pip
           python -m pip install -r .\requirements.txt pyinstaller
-          python -m PyInstaller --noconfirm --clean --onedir --windowed --name TailDesk --distpath .\dist\host --workpath .\build\host --collect-all soundcard --collect-all pycaw --collect-all comtypes --collect-all pystray --add-data ".\taildesk\web;taildesk\web" --add-data ".\taildesk\third_party;taildesk\third_party" .\remote_desktop_connection.py
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --name TailDesk --distpath .\dist\host --workpath .\build\host --collect-all soundcard --collect-all pycaw --collect-all comtypes --collect-all pystray --add-data ".\taildesk\web;taildesk\web" .\remote_desktop_connection.py
           python -m PyInstaller --noconfirm --clean --onefile --windowed --name TailDesk-Setup --distpath .\dist\installer --workpath .\build\installer --add-data ".\dist\host\TailDesk;payload\TailDesk" .\installer.py
           Copy-Item .\dist\installer\TailDesk-Setup.exe ".\dist\TailDesk-Setup-$version.exe"
 

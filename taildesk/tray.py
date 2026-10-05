@@ -31,7 +31,7 @@ def create_tray(
         pystray.Menu(
             pystray.MenuItem("Open TailDesk settings", lambda icon, item: on_open(), default=True),
             pystray.MenuItem("Configure GitHub updates", lambda icon, item: on_configure_updates()),
-            pystray.MenuItem("Install virtual audio device", lambda icon, item: on_install_audio()),
+            pystray.MenuItem("Install VB-CABLE audio device", lambda icon, item: on_install_audio()),
             pystray.MenuItem("Quit TailDesk", lambda icon, item: (on_quit(), icon.stop())),
         ),
     )

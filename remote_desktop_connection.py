@@ -12,7 +12,6 @@ from pathlib import Path
 from tkinter import Tk, messagebox, simpledialog
 
 from taildesk.config import ConfigStore
-from taildesk.audio import AudioRouter
 from taildesk.display import DisplayController
 from taildesk.server import create_app, find_tailscale_ipv4
 from taildesk.startup import set_startup
@@ -109,7 +108,7 @@ def main() -> int:
             daemon=True,
         ).start()
 
-    local_url = app.config.get("TAILDESK_SERVE_URL") or f"http://{host}:{port}/"
+    local_url = f"http://127.0.0.1:{port}/"
     LOG.info("TailDesk is listening on %s:%s", host, port)
     if host == "127.0.0.1":
         LOG.warning("Tailscale was not detected. Remote access is disabled; connect Tailscale or set the bind address in settings.")
@@ -117,10 +116,10 @@ def main() -> int:
         LOG.info("Connect from another Tailnet device at http://%s:%s", host, port)
 
     tray = create_tray(
-        on_open=lambda: webbrowser.open(app.config.get("TAILDESK_SERVE_URL") or f"http://{host}:{port}/"),
+        on_open=lambda: webbrowser.open(local_url),
         connected=lambda: bool(connection_state.connected),
         on_quit=connection_state.disconnect,
-        on_install_audio=AudioRouter.open_driver_setup,
+        on_install_audio=connection_state.audio.open_driver_setup,
         on_configure_updates=configure_updates,
     )
     if "--minimized" not in sys.argv:

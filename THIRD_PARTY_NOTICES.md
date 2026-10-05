@@ -1,10 +1,10 @@
 # Third-party notices
 
-TailDesk includes the unmodified signed Windows virtual audio driver package from [VirtualDrivers/Virtual-Audio-Driver release 25.7.14](https://github.com/VirtualDrivers/Virtual-Audio-Driver/releases/tag/25.7.14).
+TailDesk can download the unmodified [VB-Audio VB-CABLE Driver Pack 45](https://vb-audio.com/Cable/) package when the user chooses to install remote audio.
 
-- The upstream project is licensed under MIT; its license is in `taildesk/third_party/Virtual-Audio-Driver-LICENSE.txt`.
-- The driver includes code derived from Microsoft's Windows Driver Kit Sysvad sample, licensed under Microsoft Public License (MS-PL); its required notice and license are in `taildesk/third_party/Virtual-Audio-Driver-THIRD_PARTY_NOTICES.md`.
-- TailDesk's bundled ZIP SHA-256: `DD10560994DE65A7E587FB8B93C0D7E9838292D9C3566A0976C2786D727292BD`.
-- The bundled `VirtualAudioDriver.sys` was verified locally with a valid Authenticode signature from SignPath Foundation.
+- VB-CABLE is donationware. See [VB-Audio's licensing terms](https://vb-audio.com/Services/licensing.htm); the app identifies the vendor and links to its donation page.
+- The package is obtained from the vendor's official download host and pinned by SHA-256 `B950E39F01AF1D04EA623C8F6D8EB9B6EA5C477C637295FABF20631C85116BFB`.
+- TailDesk does not redistribute or modify the vendor files. The vendor installer is run after Windows administrator approval.
+- The setup executable and Windows 10 x64 hardware catalog were verified locally with Authenticode signatures from Vincent Burel and Microsoft Windows Hardware Compatibility Publisher.
 
-TailDesk does not modify this driver package. Windows administrator approval is required to install it.
+Windows administrator approval is required to run the vendor installer.

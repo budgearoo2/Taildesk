@@ -5,18 +5,20 @@ import hashlib
 import json
 import logging
 import queue
-import os
-import subprocess
 import threading
+import time
+import urllib.request
 import zipfile
 from pathlib import Path
 
 from taildesk.config import APP_DIR
 
 LOG = logging.getLogger("TailDesk.audio")
-VIRTUAL_SPEAKER_NAME = "Virtual Audio Driver"
-DRIVER_ARCHIVE = Path(__file__).resolve().parent / "third_party" / "VirtualAudioDriver-25.7.14.zip"
-DRIVER_SHA256 = "DD10560994DE65A7E587FB8B93C0D7E9838292D9C3566A0976C2786D727292BD"
+VIRTUAL_SPEAKER_NAME = "CABLE Input"
+DRIVER_DOWNLOAD_URL = "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip"
+DRIVER_ARCHIVE = APP_DIR / "VBCABLE_Driver_Pack45.zip"
+DRIVER_SHA256 = "B950E39F01AF1D04EA623C8F6D8EB9B6EA5C477C637295FABF20631C85116BFB"
+DRIVER_PACKAGE_DIR = APP_DIR / "vb-cable-pack45"
 AUDIO_STATE_FILE = APP_DIR / "audio-routing.json"
 AUDIO_RATE = 48_000
 AUDIO_CHANNELS = 2
@@ -34,6 +36,9 @@ class AudioRouter:
         self.device_id: str | None = None
         self.original_defaults: dict[int, str] = {}
         self.error: str | None = None
+        self.installing = False
+        self.setup_process_handle: int | None = None
+        self.driver_installed_callback = None
         if recover_interrupted_route:
             self._recover_stale_route()
 
@@ -114,37 +119,124 @@ class AudioRouter:
             comtypes.CoUninitialize()
         self._save_route("pending", defaults)
 
+    def open_driver_setup(self) -> str:
+        """Open the original signed VB-CABLE installer with Windows UAC."""
+        if self._find_virtual_device():
+            return "VB-CABLE is already installed."
+        with self.lock:
+            if self.installing:
+                return "The VB-CABLE installer is already open on the host."
+            self.installing = True
+            self.error = None
+        try:
+            APP_DIR.mkdir(parents=True, exist_ok=True)
+            if not DRIVER_ARCHIVE.is_file() or hashlib.sha256(DRIVER_ARCHIVE.read_bytes()).hexdigest().upper() != DRIVER_SHA256:
+                request = urllib.request.Request(
+                    DRIVER_DOWNLOAD_URL,
+                    headers={"User-Agent": "TailDesk/0.1 VB-CABLE installer"},
+                )
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    if response.geturl() != DRIVER_DOWNLOAD_URL:
+                        raise ValueError("The VB-CABLE download redirected away from its official vendor URL.")
+                    archive_bytes = response.read(5 * 1024 * 1024 + 1)
+                if len(archive_bytes) > 5 * 1024 * 1024:
+                    raise ValueError("The VB-CABLE package exceeded its expected download size.")
+                if hashlib.sha256(archive_bytes).hexdigest().upper() != DRIVER_SHA256:
+                    raise ValueError("The VB-CABLE download failed its SHA-256 verification.")
+                temporary_archive = DRIVER_ARCHIVE.with_suffix(".download")
+                temporary_archive.write_bytes(archive_bytes)
+                temporary_archive.replace(DRIVER_ARCHIVE)
+            if hashlib.sha256(DRIVER_ARCHIVE.read_bytes()).hexdigest().upper() != DRIVER_SHA256:
+                raise ValueError("The official VB-CABLE package failed its SHA-256 check.")
+            DRIVER_PACKAGE_DIR.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(DRIVER_ARCHIVE) as package:
+                for member in package.infolist():
+                    member_path = Path(member.filename)
+                    if member_path.is_absolute() or ".." in member_path.parts:
+                        raise ValueError("The audio driver package contains an unsafe path.")
+                package.extractall(DRIVER_PACKAGE_DIR)
+            setup_path = DRIVER_PACKAGE_DIR / "VBCABLE_Setup_x64.exe"
+            if not setup_path.is_file():
+                raise FileNotFoundError("The VB-CABLE 64-bit installer is missing from the verified package.")
+            self._remember_defaults_before_install()
+            process = self._launch_elevated_setup(setup_path)
+            self.setup_process_handle = process
+            threading.Thread(
+                target=self._watch_driver_install, args=(process,), name="taildesk-driver-install-watch", daemon=True
+            ).start()
+            return "VB-Audio's installer opened on the host. Choose Install Driver there; TailDesk will update this status when it finishes. VB-CABLE is donationware."
+        except Exception:
+            with self.lock:
+                self.installing = False
+            raise
+
     @staticmethod
-    def open_driver_setup() -> None:
-        """Open the local Windows device wizard with the pinned signed driver unpacked."""
-        router = AudioRouter(recover_interrupted_route=False)
-        if router._find_virtual_device():
-            ctypes.windll.user32.MessageBoxW(
-                None, "The TailDesk virtual audio device is already installed.",
-                "TailDesk audio", 0x40,
-            )
-            return
-        router._remember_defaults_before_install()
-        if hashlib.sha256(DRIVER_ARCHIVE.read_bytes()).hexdigest().upper() != DRIVER_SHA256:
-            raise ValueError("The bundled virtual audio driver package failed its SHA-256 check.")
-        destination = APP_DIR / "audio-driver-25.7.14"
-        destination.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(DRIVER_ARCHIVE) as package:
-            for member in package.infolist():
-                member_path = Path(member.filename)
-                if member_path.is_absolute() or ".." in member_path.parts:
-                    raise ValueError("The audio driver package contains an unsafe path.")
-            package.extractall(destination)
-        driver_folder = destination / "Virtual Audio Driver"
-        message = (
-            "TailDesk uses the signed Virtual Audio Driver by VirtualDrivers (MIT; Microsoft Sysvad notices included).\n\n"
-            "In Device Manager, choose Action > Add legacy hardware > install manually > Sound, video and game controllers > Have Disk, then select:\n\n"
-            f"{driver_folder / 'VirtualAudioDriver.inf'}\n\n"
-            "Approve the Windows administrator prompt. Restart Windows if it asks. On your next TailDesk connection, the virtual speaker will become the default output and return to your previous output when you disconnect."
-        )
-        ctypes.windll.user32.MessageBoxW(None, message, "Install TailDesk virtual audio", 0x40)
-        os.startfile(destination)
-        subprocess.Popen(["mmc.exe", "devmgmt.msc"], close_fds=True)
+    def _launch_elevated_setup(setup_path: Path) -> int:
+        class ShellExecuteInfo(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", ctypes.c_ulong), ("fMask", ctypes.c_ulong),
+                ("hwnd", ctypes.c_void_p), ("lpVerb", ctypes.c_wchar_p),
+                ("lpFile", ctypes.c_wchar_p), ("lpParameters", ctypes.c_wchar_p),
+                ("lpDirectory", ctypes.c_wchar_p), ("nShow", ctypes.c_int),
+                ("hInstApp", ctypes.c_void_p), ("lpIDList", ctypes.c_void_p),
+                ("lpClass", ctypes.c_wchar_p), ("hkeyClass", ctypes.c_void_p),
+                ("dwHotKey", ctypes.c_ulong), ("hIconOrMonitor", ctypes.c_void_p),
+                ("hProcess", ctypes.c_void_p),
+            ]
+
+        info = ShellExecuteInfo()
+        info.cbSize = ctypes.sizeof(info)
+        info.fMask = 0x00000040  # SEE_MASK_NOCLOSEPROCESS
+        info.lpVerb = "runas"
+        info.lpFile = str(setup_path)
+        info.lpDirectory = str(setup_path.parent)
+        info.nShow = 1
+        shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+        shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(ShellExecuteInfo)]
+        shell32.ShellExecuteExW.restype = ctypes.c_int
+        if not shell32.ShellExecuteExW(ctypes.byref(info)):
+            error = ctypes.get_last_error()
+            if error == 1223:
+                raise RuntimeError("Windows administrator approval was cancelled.")
+            raise OSError(error, "Windows could not open the VB-CABLE installer.")
+        if not info.hProcess:
+            raise OSError("Windows started the installer without returning a process handle.")
+        return int(info.hProcess)
+
+    def _watch_driver_install(self, process_handle: int) -> None:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        wait_for_single_object = kernel32.WaitForSingleObject
+        wait_for_single_object.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        wait_for_single_object.restype = ctypes.c_uint32
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [ctypes.c_void_p]
+        process_exited = False
+        try:
+            for _ in range(1800):
+                time.sleep(2)
+                process_exited = wait_for_single_object(process_handle, 0) == 0
+                if process_exited:
+                    self.setup_process_handle = None
+                try:
+                    device = self._find_virtual_device()
+                except Exception:
+                    LOG.exception("Could not check whether VB-CABLE was installed")
+                    device = None
+                if device:
+                    self.installing = False
+                    self.error = "VB-CABLE is installed. Windows may require a restart before it becomes available to apps."
+                    if self.driver_installed_callback:
+                        self.driver_installed_callback()
+                    return
+                if process_exited:
+                    self.installing = False
+                    self.error = "VB-CABLE setup closed before its audio device appeared. If you canceled it, click Install VB-CABLE to try again."
+                    return
+            self.installing = False
+            self.error = "VB-CABLE setup is still running. Finish or close it on the host."
+        finally:
+            close_handle(process_handle)
+            self.setup_process_handle = None
 
     @staticmethod
     def _audio_apis():
@@ -180,6 +272,7 @@ class AudioRouter:
                 return {"available": True, "active": self.thread is not None and self.thread.is_alive(),
                         "message": self.error or "Virtual speaker is routing audio to this remote session."}
             error = self.error
+            installing = self.installing
         try:
             device = self._find_virtual_device()
         except Exception:
@@ -188,8 +281,9 @@ class AudioRouter:
         if device:
             return {"available": True, "active": False,
                     "message": error or "Virtual speaker is installed; audio will switch on connection."}
-        return {"available": False, "active": False,
-                "message": error or "Install the TailDesk signed virtual audio device to enable remote sound."}
+        return {"available": False, "active": False, "installing": installing,
+                "message": error or ("Waiting for Windows administrator approval to install VB-CABLE."
+                                     if installing else "Install VB-CABLE from VB-Audio to enable remote sound.")}
 
     def connect(self) -> None:
         with self.lock:
