@@ -77,8 +77,9 @@ jobs:
           $match = [regex]::Match($source, '__version__\s*=\s*"(\d+\.\d+\.\d+)"')
           if (-not $match.Success) { throw "taildesk.__version__ must be a semantic version such as 1.0.0." }
           $version = $match.Groups[1].Value
-          gh release view "v$version" --repo "$env:GITHUB_REPOSITORY" 2>$null
-          if ($LASTEXITCODE -eq 0) { throw "Release v$version already exists. Bump taildesk.__version__ before publishing." }
+          $releases = gh release list --repo "$env:GITHUB_REPOSITORY" --json tagName --limit 1000 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "Could not check existing GitHub releases." }
+          if ($releases.tagName -contains "v$version") { throw "Release v$version already exists. Bump taildesk.__version__ before publishing." }
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Build the self-contained Windows application and setup program
