@@ -2,36 +2,34 @@
   "use strict";
 
   function create(send) {
-    let chain = Promise.resolve();
-    let newestMove = null;
-    let moveQueued = false;
+    const pending = [];
+    let running = false;
+    let settled = Promise.resolve();
 
     function enqueue(kind, values = {}) {
-      if (kind === "move") {
-        newestMove = values;
-        if (moveQueued) return chain;
-        moveQueued = true;
-        chain = chain.then(async () => {
-          const move = newestMove;
-          newestMove = null;
-          if (move) await send("move", move);
-        }).catch(() => {}).finally(() => {
-          moveQueued = false;
-          if (newestMove) enqueue("move", newestMove);
+      // Replace only adjacent unsent motion. Never move a drag across button-up.
+      const last = pending[pending.length - 1];
+      if (kind === "move" && last?.kind === "move") last.values = values;
+      else pending.push({ kind, values });
+      if (!running) {
+        running = true;
+        settled = Promise.resolve().then(async () => {
+          try {
+            while (pending.length) {
+              const next = pending.shift();
+              try { await send(next.kind, next.values); } catch (_) {}
+            }
+          } finally { running = false; }
         });
-        return chain;
       }
-
-      // Keep key, button, and click transitions ordered with pointer movement.
-      chain = chain.then(() => send(kind, values)).catch(() => {});
-      return chain;
+      return settled;
     }
 
     async function idle() {
       while (true) {
-        const pending = chain;
-        await pending;
-        if (pending === chain && !moveQueued && newestMove === null) return;
+        const current = settled;
+        await current;
+        if (current === settled && !running && pending.length === 0) return;
       }
     }
 

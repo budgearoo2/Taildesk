@@ -2,6 +2,8 @@
 .audio-status{color:#a9bacb;font-size:13px;margin-top:0}
 .clipboard-heading{display:flex;align-items:center;justify-content:space-between;gap:8px}.clipboard-heading label{margin-top:0}.clipboard-heading button{padding:3px 9px;font-size:19px;line-height:1}
 .version{font-size:11px;color:#9eacbc;white-space:nowrap}
+#monitor-select{max-width:210px;border:1px solid #485a6f;border-radius:6px;padding:6px 8px;background:#344152;color:#fff;font:13px system-ui,sans-serif}header{overflow-x:auto}
+.host-home{width:100%;padding:32px 16px;overflow:auto}.host-card{width:min(680px,100%);margin:0 auto}.host-card h1{font-size:26px}.host-card p{font-size:15px;line-height:1.6}#remote-url{font-family:ui-monospace,Consolas,monospace}button:disabled{opacity:.55;cursor:default}
 .stats-overlay{position:absolute;z-index:2;top:12px;left:12px;min-width:245px;padding:10px 12px;border:1px solid #718198;border-radius:8px;background:#101923eF;color:#eaf1fa;font:12px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;box-shadow:0 8px 28px #0008;pointer-events:none}
 .stats-overlay strong{display:block;margin-bottom:3px;color:#9dd3ff;font:600 12px system-ui,sans-serif}
 .stats-overlay small{display:block;margin-top:3px;color:#aeb9c7;font:10px/1.4 system-ui,sans-serif}

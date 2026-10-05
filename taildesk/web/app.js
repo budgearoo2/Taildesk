@@ -2,6 +2,7 @@
   const $ = (id) => document.getElementById(id);
   const desktop = $("desktop");
   const screenContext = desktop.getContext("2d", { alpha: false });
+  const cursorSync = window.TailDeskCursorSync.create(desktop);
   const clipboardText = $("clipboard-text");
   const streamStats = window.TailDeskStreamStats.create();
   const appleKeyboard = /Mac|iPhone|iPad/.test(navigator.platform || "");
@@ -9,11 +10,17 @@
   let frameTimer;
   let heartbeatTimer;
   let clipboardTimer;
+  let hostStatusTimer;
+  let hostMode = false;
+  let selectedMonitor = "";
+  let switchingMonitor = false;
+  let frameGeneration = 0;
+  let currentFrame = Promise.resolve();
   const inputQueue = window.TailDeskInputQueue.create((kind, values) =>
     api("/api/input", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind, ...values }),
+      body: JSON.stringify({ kind, monitor: selectedMonitor, ...values }),
     }),
   );
   let held = new Set();
@@ -56,6 +63,7 @@
 
   async function api(path, options = {}) {
     const response = await fetch(path, { cache: "no-store", ...options });
+    if (response.ok && active) cursorSync.update(response.headers);
     const type = response.headers.get("content-type") || "";
     const data = type.includes("application/json") ? await response.json() : null;
     if (response.status === 401 && path !== "/api/login") showLogin();
@@ -72,10 +80,14 @@
   }
 
   function showLogin() {
+    frameGeneration += 1;
+    $("monitor-select").disabled = true;
+    cursorSync.reset();
     active = false;
     clearTimeout(frameTimer);
     clearInterval(heartbeatTimer);
     clearInterval(clipboardTimer);
+    clearInterval(hostStatusTimer);
     audioPlaying = false;
     clearTimeout(audioPollTimer);
     audioContext?.suspend();
@@ -85,14 +97,60 @@
     $("connection").classList.remove("online");
   }
 
+  function renderHostStatus(state) {
+    $("remote-url").value = state.remote_url || "Remote access is not ready";
+    $("copy-url").disabled = !state.remote_url;
+    $("host-status").textContent = state.connected ? "Your other device is connected." : "Waiting for your other device.";
+    $("host-error").textContent = state.restart_required
+      ? "Settings saved. Quit TailDesk from the tray and reopen it to apply the connection changes."
+      : state.listener_error || "";
+    $("host-https").textContent = state.https_url
+      ? `Optional HTTPS address for your other device: ${state.https_url}`
+      : state.https_error ? `Optional HTTPS setup: ${state.https_error}` : "";
+    updateAudioStatus(state.audio);
+  }
+
+  $("copy-url").addEventListener("click", async () => {
+    const field = $("remote-url");
+    try {
+      await navigator.clipboard.writeText(field.value);
+      toast("Address copied. Open it on your other device.");
+    } catch (_) {
+      field.select();
+      toast("Press Ctrl+C to copy the selected address.");
+    }
+  });
+
   async function connect() {
     try {
       const state = await api("/api/state");
       if (state.version) $("version").textContent = `v${state.version}`;
       fps = state.settings.fps;
       configuredQuality = state.settings.jpeg_quality;
+      if (state.host_browser) {
+        hostMode = true;
+        active = false;
+        clearTimeout(frameTimer);
+        clearInterval(heartbeatTimer);
+        clearInterval(clipboardTimer);
+        clearInterval(hostStatusTimer);
+        $("login").classList.add("hidden");
+        $("desktop").classList.add("hidden");
+        $("host-home").classList.remove("hidden");
+        $("connection").textContent = "Host settings";
+        $("sign-out").classList.toggle("hidden", !!state.local_access);
+        for (const id of ["fullscreen", "monitor-select", "audio-toggle", "stats-toggle", "clipboard", "files-toggle"]) $(id).classList.add("hidden");
+        renderHostStatus(state);
+        hostStatusTimer = setInterval(async () => {
+          try { renderHostStatus(await api("/api/state")); }
+          catch (_) { $("host-error").textContent = "TailDesk is unavailable. Reopen the app from its installed folder."; }
+        }, 5000);
+        return;
+      }
       active = true;
-      adaptiveFps = Math.min(fps, 12);
+      frameGeneration += 1;
+      cursorSync.reset();
+      adaptiveFps = Math.min(fps, 30);
       adaptiveQuality = configuredQuality;
       streamStats.reset();
       latestStats = streamStats.snapshot();
@@ -232,13 +290,79 @@
     };
   }
 
-  function heartbeat() {
+  function renderMonitors(state) {
+    const monitors = state.monitors || [];
+    const selector = $("monitor-select");
+    const next = state.selected_monitor || monitors[0]?.id || "";
+    if (next !== selectedMonitor) {
+      const wasSelected = !!selectedMonitor;
+      selectedMonitor = next;
+      forceFullFrame = true;
+      cursorSync.reset();
+      if (wasSelected && active && !switchingMonitor) {
+        frameGeneration += 1;
+        clearTimeout(frameTimer);
+        currentFrame.finally(() => { if (active && !switchingMonitor) refreshFrame(); });
+      }
+    }
+    const signature = JSON.stringify(monitors);
+    if (selector.dataset.monitors !== signature) {
+      selector.replaceChildren(...monitors.map((monitor) => {
+        const option = document.createElement("option");
+        option.value = monitor.id;
+        option.textContent = `${monitor.label} · ${monitor.width} × ${monitor.height}`;
+        return option;
+      }));
+      selector.dataset.monitors = signature;
+    }
+    selector.value = selectedMonitor;
+    selector.disabled = !active || switchingMonitor || monitors.length < 2;
+  }
+
+  $("monitor-select").addEventListener("change", async () => {
+    if (!active || switchingMonitor) return;
+    const requested = $("monitor-select").value;
+    switchingMonitor = true;
+    $("monitor-select").disabled = true;
+    releaseKeys();
+    active = false;
+    frameGeneration += 1;
+    clearTimeout(frameTimer);
+    clearInterval(heartbeatTimer);
+    try {
+      await inputQueue.idle();
+      await currentFrame;
+      const state = await api("/api/monitor", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ monitor: requested }),
+      });
+      renderMonitors(state);
+    } catch (error) {
+      toast(error.message);
+      $("monitor-select").value = selectedMonitor;
+    } finally {
+      switchingMonitor = false;
+      active = $("login").classList.contains("hidden");
+      forceFullFrame = true;
+      cursorSync.reset();
+      if (active) {
+        await heartbeat().catch((error) => toast(error.message));
+        refreshFrame();
+        heartbeatTimer = setInterval(() => heartbeat().catch(() => {}), 2500);
+      }
+    }
+  });
+
+  async function heartbeat() {
     const size = targetSize();
-    return api("/api/heartbeat", {
+    const generation = frameGeneration;
+    const state = await api("/api/heartbeat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(size),
     });
+    if (generation === frameGeneration && !switchingMonitor) renderMonitors(state);
+    return state;
   }
 
   let resizeTimer;
@@ -249,16 +373,23 @@
 
   function refreshFrame() {
     if (!active) return;
+    const generation = frameGeneration;
+    const monitorAtStart = selectedMonitor;
+    const isCurrent = () => active && generation === frameGeneration && monitorAtStart === selectedMonitor;
     const started = performance.now();
     let responseBytes = 0;
     let updatedFrame = false;
-    const url = `/api/screen?t=${Date.now()}&q=${adaptiveQuality}${forceFullFrame ? "&full=1" : ""}`;
+    const url = `/api/screen?t=${Date.now()}&q=${adaptiveQuality}&monitor=${encodeURIComponent(selectedMonitor)}${forceFullFrame ? "&full=1" : ""}`;
     forceFullFrame = false;
-    fetch(url, { cache: "no-store" }).then(async (response) => {
+    currentFrame = fetch(url, { cache: "no-store" }).then(async (response) => {
+      if (!isCurrent()) return;
       if (response.status === 401) { showLogin(); return; }
       if (response.status === 409) throw new Error("Desktop session ended");
+      if (response.ok && active) cursorSync.update(response.headers);
       if (response.status === 204) return;
       if (!response.ok) throw new Error(`Screen request failed (${response.status})`);
+      const monitor = response.headers.get("X-TailDesk-Monitor");
+      if (monitor && monitor !== selectedMonitor) { forceFullFrame = true; return; }
       const type = response.headers.get("content-type") || "";
       if (type.includes("application/vnd.taildesk.tiles")) {
         const bytes = await response.arrayBuffer();
@@ -268,16 +399,13 @@
           forceFullFrame = true;
           return;
         }
-        for (const tile of update.tiles) {
-          const bitmap = await createImageBitmap(tile.jpeg);
-          screenContext.drawImage(bitmap, tile.x, tile.y, tile.width, tile.height);
-          bitmap.close();
-        }
+        await window.TailDeskScreenProtocol.drawDeltaFrame(screenContext, update, createImageBitmap, isCurrent);
         updatedFrame = update.tiles.length > 0;
       } else {
         const bytes = await response.arrayBuffer();
         responseBytes = bytes.byteLength;
         const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
+        if (!isCurrent()) { bitmap.close(); return; }
         if (desktop.width !== bitmap.width || desktop.height !== bitmap.height) {
           desktop.width = bitmap.width;
           desktop.height = bitmap.height;
@@ -290,7 +418,7 @@
       forceFullFrame = true;
       if (error.message === "Desktop session ended") toast(error.message);
     }).finally(() => {
-      if (!active) return;
+      if (!isCurrent()) return;
       const elapsed = performance.now() - started;
       latestStats = streamStats.record({ byteLength: responseBytes, updated: updatedFrame, elapsedMs: elapsed });
       if (!$("stats-overlay").classList.contains("hidden")) renderStats(latestStats);
@@ -310,6 +438,7 @@
   }
 
   function input(kind, values = {}) {
+    if (hostMode || !active) return Promise.resolve();
     // Coalesce pointer movement while preserving ordered key/button transitions.
     return inputQueue.enqueue(kind, values);
   }
@@ -324,17 +453,8 @@
     };
   }
 
-  let latestMove = null;
-  let movePending = false;
   desktop.addEventListener("pointermove", (event) => {
-    latestMove = screenPoint(event);
-    if (!movePending) {
-      movePending = true;
-      setTimeout(() => {
-        movePending = false;
-        if (latestMove) input("move", latestMove);
-      }, 16);
-    }
+    if (active) input("move", screenPoint(event));
   });
   desktop.addEventListener("pointerdown", (event) => {
     desktop.focus();
@@ -572,6 +692,7 @@
       configuredQuality = data.settings.jpeg_quality;
       adaptiveQuality = Math.min(adaptiveQuality, configuredQuality);
       $("settings").classList.add("hidden");
+      if (hostMode) renderHostStatus(await api("/api/state"));
       if (data.restart_required) toast(data.https_url ? `Saved. Restart TailDesk to apply the port; secure URL: ${data.https_url}` : "Saved. Restart TailDesk to apply the bind address or port.");
       else if (data.https_url) toast(`Saved. Secure Tailnet URL: ${data.https_url}`);
       else if (data.https_error) toast(`Settings saved; HTTPS setup needs attention: ${data.https_error}`);

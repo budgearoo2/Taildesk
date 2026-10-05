@@ -40,5 +40,22 @@
     return { width, height, tiles };
   }
 
-  globalThis.TailDeskScreenProtocol = Object.freeze({ decodeDeltaFrame });
+  async function drawDeltaFrame(context, update, decode, isCurrent = () => true) {
+    let next = 0;
+    async function worker() {
+      while (next < update.tiles.length && isCurrent()) {
+        const tile = update.tiles[next++];
+        const bitmap = await decode(tile.jpeg);
+        try {
+          if (isCurrent()) context.drawImage(bitmap, tile.x, tile.y, tile.width, tile.height);
+        } finally { bitmap.close(); }
+      }
+    }
+    // Decode independent tiles concurrently with a bounded bitmap working set.
+    const results = await Promise.allSettled(Array.from({ length: Math.min(8, update.tiles.length) }, worker));
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed) throw failed.reason;
+  }
+
+  globalThis.TailDeskScreenProtocol = Object.freeze({ decodeDeltaFrame, drawDeltaFrame });
 })();

@@ -9,6 +9,11 @@ from unittest.mock import patch
 
 from taildesk.server import create_app
 
+TEST_MONITORS = [
+    {"id": "display-1", "label": "Screen 1 (primary)", "left": 0, "top": 0, "width": 1280, "height": 720, "primary": True},
+    {"id": "display-2", "label": "Screen 2", "left": -1920, "top": -200, "width": 1920, "height": 1080, "primary": False},
+]
+
 
 class MemoryStore:
     def __init__(self) -> None:
@@ -56,6 +61,10 @@ class FakeDisplay:
     def __init__(self) -> None:
         self.restores = 0
         self.resolutions = []
+        self.selected = None
+
+    def select_monitor(self, device):
+        self.selected = device
 
     def resize(self, width: int, height: int) -> None:
         self.resolutions.append((width, height))
@@ -67,6 +76,7 @@ class FakeDisplay:
 class FakeCapture:
     def __init__(self, rgb: bytes) -> None:
         self.rgb = rgb
+        self.bgra = b"".join(bytes((rgb[i + 2], rgb[i + 1], rgb[i], 255)) for i in range(0, len(rgb), 3))
         self.monitors = [None, {"left": 0, "top": 0, "width": 256, "height": 128}]
 
     def __enter__(self):
@@ -76,17 +86,28 @@ class FakeCapture:
         return None
 
     def grab(self, _monitor):
-        return SimpleNamespace(size=(256, 128), rgb=self.rgb)
+        return SimpleNamespace(size=(256, 128), rgb=self.rgb, bgra=self.bgra)
 
 
 class SettingsApiTests(unittest.TestCase):
     def setUp(self) -> None:
+        patcher = patch("taildesk.server.list_monitors", return_value=TEST_MONITORS)
+        self.monitors = patcher.start()
+        self.addCleanup(patcher.stop)
         self.store = MemoryStore()
         self.display = FakeDisplay()
         with patch("taildesk.server.AudioRouter", FakeAudioRouter):
             self.app = create_app(self.store, self.display)
         self.app.testing = True
         self.addCleanup(self.app.config["TAILDESK_STATE"]._stop.set)
+
+    def remote_client(self):
+        client = self.app.test_client()
+        client.environ_base["REMOTE_ADDR"] = "192.0.2.10"
+        with client.session_transaction() as session:
+            session["authenticated"] = True
+            session["client_id"] = "remote-test-controller"
+        return client
 
     def test_settings_api_accepts_60_fps_and_rejects_above_limit(self) -> None:
         client = self.app.test_client()
@@ -102,6 +123,27 @@ class SettingsApiTests(unittest.TestCase):
         client = self.app.test_client()
         response = client.get("/api/settings", environ_overrides={"REMOTE_ADDR": "192.0.2.10"})
         self.assertEqual(response.status_code, 401)
+
+    def test_cursor_updates_accompany_input_and_unchanged_frames(self):
+        client = self.remote_client()
+        client.post("/api/heartbeat", json={"width": 1280, "height": 720})
+        with patch("taildesk.server.cursor_style", return_value="text"), patch("taildesk.server.pyautogui.moveTo"), patch("taildesk.server.pyautogui.size", return_value=(1280, 720)):
+            response = client.post("/api/input", json={"kind": "move", "x": 0.5, "y": 0.5})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["X-TailDesk-Cursor"], "text")
+        input_stamp = int(response.headers["X-TailDesk-Cursor-Stamp"])
+        with patch("taildesk.server.mss.mss", side_effect=[FakeCapture(bytes(256 * 128 * 3)), FakeCapture(bytes(256 * 128 * 3))]), patch("taildesk.server.cursor_style", return_value="pointer"):
+            first = client.get("/api/screen")
+            unchanged = client.get("/api/screen")
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(unchanged.status_code, 204)
+        self.assertEqual(unchanged.headers["X-TailDesk-Cursor"], "pointer")
+        self.assertGreaterEqual(int(unchanged.headers["X-TailDesk-Cursor-Stamp"]), input_stamp)
+
+    def test_non_controller_cannot_read_cursor_state(self):
+        response = self.remote_client().get("/api/screen")
+        self.assertEqual(response.status_code, 409)
+        self.assertNotIn("X-TailDesk-Cursor", response.headers)
 
     def test_upload_download_and_traversal_filename_sanitizing(self) -> None:
         with TemporaryDirectory() as folder:
@@ -128,7 +170,7 @@ class SettingsApiTests(unittest.TestCase):
         first = bytes(256 * 128 * 3)
         changed = bytearray(first)
         changed[0:24] = bytes([255]) * 24
-        client = self.app.test_client()
+        client = self.remote_client()
 
         heartbeat = client.post("/api/heartbeat", json={"width": 1280, "height": 720})
         self.assertEqual(heartbeat.status_code, 200)

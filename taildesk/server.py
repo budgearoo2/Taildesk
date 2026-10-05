@@ -25,8 +25,11 @@ from PIL import Image, ImageChops
 
 from taildesk.audio import AudioRouter
 from taildesk.config import ConfigStore, DEFAULT_TRANSFER_DIR
+from taildesk.cursor import cursor_style
 from taildesk.display import DisplayController
 from taildesk.startup import set_startup
+from taildesk.network import validate_bind_address
+from taildesk.monitors import list_monitors
 from taildesk.tailscale_serve import configure_https
 from taildesk.video import effective_jpeg_quality, encode_delta_frame, validate_frame_rate
 from taildesk import __version__
@@ -38,7 +41,7 @@ pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0
 
 
-def _pointer_position(data: dict[str, Any]) -> tuple[int, int]:
+def _pointer_position(data: dict[str, Any], monitor: dict) -> tuple[int, int]:
     """Map normalized browser coordinates to the current host input surface."""
     try:
         x_ratio = float(data.get("x", 0))
@@ -47,10 +50,9 @@ def _pointer_position(data: dict[str, Any]) -> tuple[int, int]:
         abort(400)
     if not (0 <= x_ratio <= 1 and 0 <= y_ratio <= 1):
         abort(400)
-    screen_width, screen_height = pyautogui.size()
     return (
-        round(x_ratio * max(0, screen_width - 1)),
-        round(y_ratio * max(0, screen_height - 1)),
+        monitor["left"] + round(x_ratio * max(0, monitor["width"] - 1)),
+        monitor["top"] + round(y_ratio * max(0, monitor["height"] - 1)),
     )
 
 
@@ -66,6 +68,9 @@ class ConnectionState:
         self.held_keys: set[str] = set()
         self.held_buttons: set[str] = set()
         self.previous_frame: Image.Image | None = None
+        self.frame_lock = threading.Lock()
+        self.monitor_id: str | None = None
+        self.monitor_revision = 0
         self._stop = threading.Event()
         threading.Thread(target=self._watchdog, daemon=True, name="taildesk-connection-watchdog").start()
 
@@ -85,7 +90,8 @@ class ConnectionState:
             self.connected = True
             self.owner = owner
             self.last_seen = time.monotonic()
-        self.display.resize(width, height)
+            self.current_monitor()
+            self.display.resize(width, height)
         if new_connection:
             with self.lock:
                 if self.connected and self.owner == owner:
@@ -98,6 +104,10 @@ class ConnectionState:
 
     def disconnect(self, owner: str | None = None) -> None:
         with self.lock:
+            self._disconnect(owner)
+
+    def _disconnect(self, owner: str | None = None) -> None:
+        with self.lock:
             if owner is not None and self.owner != owner:
                 return
             keys = tuple(self.held_keys)
@@ -108,7 +118,19 @@ class ConnectionState:
             self.connected = False
             self.last_seen = None
             self.owner = None
-        self.audio.disconnect()
+        try:
+            self.audio.disconnect()
+        except Exception:
+            LOG.exception("Could not restore audio; continuing to restore input and display")
+        self.release_inputs(keys, buttons)
+        self.display.restore()
+
+    def release_inputs(self, keys=None, buttons=None) -> None:
+        with self.lock:
+            if keys is None:
+                keys, buttons = tuple(self.held_keys), tuple(self.held_buttons)
+                self.held_keys.clear()
+                self.held_buttons.clear()
         for key in keys:
             try:
                 pyautogui.keyUp(key)
@@ -119,7 +141,35 @@ class ConnectionState:
                 pyautogui.mouseUp(button=button)
             except Exception:
                 LOG.exception("Could not release a held mouse button")
-        self.display.restore()
+
+    def current_monitor(self) -> dict:
+        monitors = list_monitors()
+        if not monitors:
+            raise ValueError("No active screens were detected on the host.")
+        with self.lock:
+            monitor = next((item for item in monitors if item["id"] == self.monitor_id), monitors[0])
+            if self.monitor_id != monitor["id"]:
+                self.release_inputs()
+                self.display.select_monitor(monitor["id"])
+                self.monitor_id = monitor["id"]
+                self.monitor_revision += 1
+                self.previous_frame = None
+                # Restoring the previous display can move another monitor's bounds.
+                monitor = next((item for item in list_monitors() if item["id"] == self.monitor_id), monitor)
+            return monitor
+
+    def select_monitor(self, owner: str, monitor_id: str) -> None:
+        with self.lock:
+            if not self.can_control(owner):
+                raise PermissionError("This browser does not own the active desktop session.")
+            if monitor_id not in {item["id"] for item in list_monitors()}:
+                raise ValueError("That screen is no longer available. Choose a detected screen.")
+            if monitor_id != self.monitor_id:
+                self.release_inputs()
+                self.display.select_monitor(monitor_id)
+                self.monitor_id = monitor_id
+                self.monitor_revision += 1
+                self.previous_frame = None
 
     def key_down(self, key: str, repeat: bool = False) -> None:
         with self.lock:
@@ -154,9 +204,9 @@ class ConnectionState:
         while not self._stop.wait(1):
             with self.lock:
                 expired = self.connected and self.last_seen is not None and time.monotonic() - self.last_seen > CONNECTION_TIMEOUT
-            if expired:
-                LOG.info("Remote browser timed out; restoring the original display mode")
-                self.disconnect()
+                if expired:
+                    LOG.info("Remote browser timed out; restoring the original display mode")
+                    self.disconnect()
 
 
 def find_tailscale_ipv4() -> str | None:
@@ -174,11 +224,16 @@ def find_tailscale_ipv4() -> str | None:
         if not executable or not Path(executable).exists():
             continue
         try:
-            result = subprocess.run([executable, "ip", "-4"], capture_output=True, text=True, timeout=4, check=False)
+            result = subprocess.run(
+                [executable, "ip", "-4"], capture_output=True, text=True, timeout=4,
+                check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if result.returncode != 0:
+                continue
             address = result.stdout.strip().splitlines()[0]
-            if re.fullmatch(r"100\.(?:\d{1,3}\.){2}\d{1,3}", address):
+            if ipaddress.IPv4Address(address) in ipaddress.IPv4Network("100.64.0.0/10"):
                 return address
-        except (OSError, subprocess.SubprocessError, IndexError):
+        except (OSError, subprocess.SubprocessError, IndexError, ValueError):
             continue
     return None
 
@@ -220,28 +275,53 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
     def loopback_client() -> bool:
         # Tailscale Serve is a local reverse proxy, so deny its forwarded Tailnet requests
         # before considering the loopback socket used by the host's own browser.
-        if request.headers.get("Tailscale-User-Login") or request.headers.get("Tailscale-User-Name"):
+        if any(request.headers.get(name) for name in (
+            "Tailscale-User-Login", "Tailscale-User-Name", "Tailscale-Headers-Info",
+            "Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto",
+        )):
             return False
         try:
             if not ipaddress.ip_address(request.remote_addr or "").is_loopback:
                 return False
         except ValueError:
             return False
-        hostname = request.host.partition(":")[0].strip("[]").casefold()
+        hostname = request.host.split("]", 1)[0].lstrip("[") if request.host.startswith("[") else request.host.partition(":")[0]
+        hostname = hostname.casefold()
         if hostname not in {"localhost", "127.0.0.1", "::1"}:
             return False
         fetch_site = request.headers.get("Sec-Fetch-Site")
         return fetch_site in {None, "same-origin", "none"}
 
+    def host_browser() -> bool:
+        if loopback_client():
+            return True
+        # A direct connection to this PC's own Tailnet address is still the host.
+        # This is only a control restriction, never a password bypass.
+        address = request.remote_addr or ""
+        local_addresses = app.config.get("TAILDESK_LOCAL_ADDRESSES", set())
+        return address not in {"127.0.0.1", "::1"} and address in local_addresses
+
     @app.before_request
     def require_auth():
+        if host_browser() and request.path in {
+            "/api/heartbeat", "/api/screen", "/api/input", "/api/audio", "/api/clipboard",
+            "/api/monitor",
+        }:
+            return jsonify(error="This is the host PC. Open the connection address on your laptop to control it."), 403
         if loopback_client():
             if not session.get("authenticated"):
                 session.clear()
                 session["authenticated"] = True
                 session["client_id"] = os.urandom(24).hex()
             return None
-        if request.path in {"/", "/api/login", "/static/style.css", "/static/app.js"}:
+        # All viewer dependencies must load before the remote browser signs in.
+        # Templates and other files in the web folder are not public assets.
+        if request.path in {"/", "/api/login"} or (
+            request.endpoint == "static" and request.view_args.get("filename") in {
+                "style.css", "app.js", "screen_protocol.js", "adaptive_stream.js",
+                "input_queue.js", "stream_stats.js", "cursor_sync.js",
+            }
+        ):
             return None
         if not session.get("authenticated"):
             return jsonify(error="Sign in"), 401
@@ -280,16 +360,24 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
     @app.get("/api/state")
     def get_state():
         settings = store.snapshot()
+        bind = app.config.get("TAILDESK_BIND")
+        port = app.config.get("TAILDESK_PORT", settings.get("port", 8765))
         return jsonify(
             connected=state.connected,
             version=__version__,
-            bind=find_tailscale_ipv4() if settings.get("bind_host") == "auto" else settings.get("bind_host"),
-            port=settings.get("port", 8765),
+            bind=bind,
+            port=port,
+            remote_url=f"http://{bind}:{port}/" if bind else None,
+            listener_error=app.config.get("TAILDESK_LISTENER_ERROR"),
+            restart_required=(settings.get("bind_host") != app.config.get("TAILDESK_START_BIND", settings.get("bind_host")) or settings.get("port") != port),
             settings=store.public(),
             local_access=loopback_client(),
+            host_browser=host_browser(),
             https_url=app.config.get("TAILDESK_SERVE_URL"),
             https_error=app.config.get("TAILDESK_SERVE_ERROR"),
             audio=state.audio.status(),
+            monitors=list_monitors(),
+            selected_monitor=state.monitor_id,
         )
 
     @app.post("/api/heartbeat")
@@ -297,9 +385,22 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
         data = request.get_json(silent=True) or {}
         width = max(640, min(3840, int(data.get("width", 0))))
         height = max(360, min(2160, int(data.get("height", 0))))
-        if not state.heartbeat(str(session.get("client_id", "")), width, height):
-            return jsonify(error="Another browser is currently controlling this PC."), 409
-        return jsonify(ok=True)
+        try:
+            if not state.heartbeat(str(session.get("client_id", "")), width, height):
+                return jsonify(error="Another browser is currently controlling this PC."), 409
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 409
+        return jsonify(ok=True, monitors=list_monitors(), selected_monitor=state.monitor_id)
+
+    @app.post("/api/monitor")
+    def select_monitor():
+        try:
+            state.select_monitor(str(session.get("client_id", "")), str((request.get_json(silent=True) or {}).get("monitor", "")))
+        except PermissionError as exc:
+            return jsonify(error=str(exc)), 409
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        return jsonify(ok=True, monitors=list_monitors(), selected_monitor=state.monitor_id)
 
     @app.post("/api/disconnect")
     def disconnect():
@@ -308,6 +409,10 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
 
     @app.get("/api/screen")
     def screen():
+        with state.frame_lock:
+            return screen_frame()
+
+    def screen_frame():
         if not state.can_control(session.get("client_id")):
             return jsonify(error="This browser does not own the active desktop session."), 409
         try:
@@ -316,29 +421,31 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
             quality = effective_jpeg_quality(
                 store.snapshot().get("jpeg_quality", 65), request.args.get("q")
             )
-            with mss.mss() as capture:
-                frame = capture.grab(capture.monitors[1])
-                image = Image.frombytes("RGB", frame.size, frame.rgb)
-            tile_size = 128
             with state.lock:
-                if not state.connected or state.owner != session.get("client_id"):
-                    return jsonify(error="This browser does not own the active desktop session."), 409
+                monitor = state.current_monitor()
+                revision = state.monitor_revision
                 previous = state.previous_frame
-                full = request.args.get("full") == "1" or previous is None or previous.size != image.size
-                if not full:
-                    changed: list[tuple[int, int, Image.Image]] = []
-                    difference = ImageChops.difference(image, previous)
-                    for y in range(0, image.height, tile_size):
-                        for x in range(0, image.width, tile_size):
-                            box = (x, y, min(x + tile_size, image.width), min(y + tile_size, image.height))
-                            if difference.crop(box).getbbox():
-                                changed.append((x, y, image.crop(box)))
-                    total_tiles = ((image.width + tile_size - 1) // tile_size) * ((image.height + tile_size - 1) // tile_size)
-                    full = len(changed) > total_tiles * 0.55
-                state.previous_frame = image.copy()
+                if request.args.get("monitor") and request.args["monitor"] != monitor["id"]:
+                    return make_response("", 204)
+            with mss.mss() as capture:
+                frame = capture.grab({key: monitor[key] for key in ("left", "top", "width", "height")})
+                image = Image.frombytes("RGB", frame.size, frame.bgra, "raw", "BGRX")
+            tile_size = 128
+            # Image comparison/encoding must not hold the input/controller lock.
+            full = request.args.get("full") == "1" or previous is None or previous.size != image.size
+            if not full:
+                changed: list[tuple[int, int, Image.Image]] = []
+                difference = ImageChops.difference(image, previous)
+                for y in range(0, image.height, tile_size):
+                    for x in range(0, image.width, tile_size):
+                        box = (x, y, min(x + tile_size, image.width), min(y + tile_size, image.height))
+                        if difference.crop(box).getbbox():
+                            changed.append((x, y, image.crop(box)))
+                total_tiles = ((image.width + tile_size - 1) // tile_size) * ((image.height + tile_size - 1) // tile_size)
+                full = len(changed) > total_tiles * 0.55
             if full:
                 output = io.BytesIO()
-                image.save(output, format="JPEG", quality=quality, optimize=True)
+                image.save(output, format="JPEG", quality=quality, optimize=False)
                 response = make_response(output.getvalue())
                 response.headers["Content-Type"] = "image/jpeg"
             elif not changed:
@@ -348,6 +455,11 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
                 # expansion. Header: magic, screen width, screen height, tile count.
                 response = make_response(encode_delta_frame(image.width, image.height, changed, quality))
                 response.headers["Content-Type"] = "application/vnd.taildesk.tiles"
+            with state.lock:
+                if not state.can_control(session.get("client_id")) or revision != state.monitor_revision:
+                    return make_response("", 204)
+                state.previous_frame = image
+            response.headers["X-TailDesk-Monitor"] = monitor["id"]
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-Content-Type-Options"] = "nosniff"
             return response
@@ -378,26 +490,36 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
 
     @app.post("/api/input")
     def input_event():
-        if not state.can_control(session.get("client_id")):
-            return jsonify(error="This browser does not own the active desktop session."), 409
-        data = request.get_json(silent=True) or {}
+        with state.lock:
+            if not state.can_control(session.get("client_id")):
+                return jsonify(error="This browser does not own the active desktop session."), 409
+            data = request.get_json(silent=True) or {}
+            try:
+                monitor = state.current_monitor()
+            except ValueError as exc:
+                return jsonify(error=str(exc)), 409
+            if data.get("monitor") and data["monitor"] != monitor["id"]:
+                return jsonify(error="The selected screen changed; input was discarded."), 409
+            return apply_input(data, monitor)
+
+    def apply_input(data, monitor):
         kind = data.get("kind")
         if kind == "move":
-            x, y = _pointer_position(data)
+            x, y = _pointer_position(data, monitor)
             pyautogui.moveTo(x, y)
         elif kind == "click":
             button = data.get("button", "left")
             if button not in {"left", "right", "middle"}:
                 abort(400)
             if "x" in data and "y" in data:
-                x, y = _pointer_position(data)
+                x, y = _pointer_position(data, monitor)
                 pyautogui.moveTo(x, y)
             pyautogui.click(button=button)
         elif kind in {"mouse_down", "mouse_up"}:
             button = data.get("button", "left")
             if button not in {"left", "right", "middle"}:
                 abort(400)
-            x, y = _pointer_position(data)
+            x, y = _pointer_position(data, monitor)
             (state.mouse_down if kind == "mouse_down" else state.mouse_up)(button, x, y)
         elif kind in {"down", "up"}:
             key = str(data.get("key", ""))
@@ -483,13 +605,10 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
         updates: dict[str, Any] = {}
         if "bind_host" in data:
             host = str(data["bind_host"]).strip()
-            if host not in {"auto", "127.0.0.1"}:
-                try:
-                    parsed_host = ipaddress.IPv4Address(host)
-                    if parsed_host.is_unspecified or parsed_host.is_multicast:
-                        raise ipaddress.AddressValueError("not a usable interface address")
-                except ipaddress.AddressValueError:
-                    return jsonify(error="Use auto, localhost, or a specific IPv4 interface address."), 400
+            try:
+                validate_bind_address(host)
+            except ValueError as exc:
+                return jsonify(error=str(exc)), 400
             updates["bind_host"] = host
         if "port" in data:
             port = int(data["port"])
@@ -531,6 +650,9 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
 
     @app.after_request
     def harden(response):
+        if request.path in {"/api/screen", "/api/input"} and response.status_code in {200, 204} and state.can_control(session.get("client_id")):
+            response.headers["X-TailDesk-Cursor"] = cursor_style()
+            response.headers["X-TailDesk-Cursor-Stamp"] = str(time.monotonic_ns() // 1000)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Frame-Options"] = "DENY"

@@ -76,7 +76,7 @@ def encode_delta_frame(
         ):
             raise ValueError("Frame tile is outside the frame bounds")
         output = io.BytesIO()
-        tile.save(output, format="JPEG", quality=quality, optimize=True)
+        tile.save(output, format="JPEG", quality=quality, optimize=False)
         jpeg = output.getvalue()
         payload.extend(struct.pack(">HHHHI", x, y, tile_width, tile_height, len(jpeg)))
         payload.extend(jpeg)

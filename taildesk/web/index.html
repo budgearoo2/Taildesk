@@ -13,6 +13,9 @@
     <span id="connection" class="connection">Disconnected</span>
     <span class="spacer"></span>
     <button id="fullscreen">Fullscreen</button>
+    <select id="monitor-select" aria-label="Screen to view" title="Choose a host screen" disabled>
+      <option value="">Detecting screens...</option>
+    </select>
     <button id="audio-toggle" class="quiet">Install VB-CABLE</button>
     <button id="stats-toggle" class="quiet" aria-controls="stats-overlay" aria-pressed="false">Stats</button>
     <button id="clipboard" aria-controls="clipboard-fallback" aria-expanded="false">Clipboard</button>
@@ -21,6 +24,20 @@
     <button id="sign-out" class="quiet">Sign out</button>
   </header>
   <main>
+    <section id="host-home" class="host-home hidden" aria-labelledby="host-heading">
+      <div class="card host-card">
+        <h1 id="host-heading">This PC is the host</h1>
+        <p>Keep TailDesk running here. Open the address below in your laptop's browser and sign in with your TailDesk password.</p>
+        <label for="remote-url">Connection address for your other device</label>
+        <input id="remote-url" readonly value="Checking connection...">
+        <button id="copy-url">Copy address</button>
+        <p id="host-status" role="status"></p>
+        <p id="host-error" class="error" role="alert"></p>
+        <p id="host-https" class="hint"></p>
+        <p>Screen viewing, keyboard control, and display changes are disabled on this host page. Use Settings above to configure TailDesk.</p>
+        <p class="hint">If your laptop cannot connect, make sure Tailscale is connected on both devices and Windows Firewall allows TailDesk's port from your Tailnet.</p>
+      </div>
+    </section>
     <canvas id="desktop" aria-label="Remote Windows desktop" tabindex="0"></canvas>
     <aside id="stats-overlay" class="stats-overlay hidden" aria-label="Stats for nerds" aria-live="off">
       <strong>Stats for nerds</strong>
@@ -94,6 +111,7 @@
   <script src="{{ url_for('static', filename='stream_stats.js') }}" defer></script>
   <script src="{{ url_for('static', filename='input_queue.js') }}" defer></script>
   <script src="{{ url_for('static', filename='screen_protocol.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='cursor_sync.js') }}" defer></script>
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </body>
 </html>

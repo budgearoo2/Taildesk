@@ -28,7 +28,10 @@ def _run(arguments: list[str]) -> subprocess.CompletedProcess[str] | None:
     if not executable:
         return None
     try:
-        return subprocess.run([executable, *arguments], capture_output=True, text=True, timeout=15, check=False)
+        return subprocess.run(
+            [executable, *arguments], capture_output=True, text=True, timeout=15,
+            check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
     except (OSError, subprocess.SubprocessError):
         return None
 

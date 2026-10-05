@@ -56,17 +56,24 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { throw "Could not upgrade pip." }
           python -m pip install -r .\requirements.txt pyinstaller
+          if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed." }
           python -m pip install pip-audit
+          if ($LASTEXITCODE -ne 0) { throw "Could not install dependency audit." }
           python -m pip_audit -r .\requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw "Dependency audit failed." }
           python -m compileall -q .\taildesk .\remote_desktop_connection.py .\installer.py .\tests
+          if ($LASTEXITCODE -ne 0) { throw "Python compilation failed." }
           python -m unittest discover -s .\tests -v
-          node --check .\taildesk\web\app.js
-          node --check .\taildesk\web\screen_protocol.js
-          node --check .\taildesk\web\adaptive_stream.js
-          node --check .\taildesk\web\input_queue.js
-          node --check .\taildesk\web\stream_stats.js
-          node --test .\tests\adaptive_stream.test.cjs .\tests\input_queue.test.cjs .\tests\screen_protocol.test.cjs .\tests\stream_stats.test.cjs
+          if ($LASTEXITCODE -ne 0) { throw "Python regression tests failed." }
+          Get-ChildItem .\taildesk\web\*.js | ForEach-Object {
+            node --check $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "JavaScript syntax verification failed." }
+          }
+          $browserTests = @(Get-ChildItem .\tests\*.test.cjs | ForEach-Object { $_.FullName })
+          node --test @browserTests
+          if ($LASTEXITCODE -ne 0) { throw "Browser regression tests failed." }
 
       - name: Read version and reject duplicate releases
         id: version
@@ -88,7 +95,9 @@ jobs:
         run: |
           $version = "${{ steps.version.outputs.version }}"
           python -m PyInstaller --noconfirm --clean --onedir --windowed --name TailDesk --distpath .\dist\host --workpath .\build\host --collect-all soundcard --collect-all pycaw --collect-all comtypes --collect-all pystray --add-data ".\taildesk\web;taildesk\web" .\remote_desktop_connection.py
+          if ($LASTEXITCODE -ne 0) { throw "Host packaging failed." }
           python -m PyInstaller --noconfirm --clean --onefile --windowed --name TailDesk-Setup --distpath .\dist\installer --workpath .\build\installer --add-data ".\dist\host\TailDesk;payload\TailDesk" .\installer.py
+          if ($LASTEXITCODE -ne 0) { throw "Setup packaging failed." }
           Copy-Item .\dist\installer\TailDesk-Setup.exe ".\dist\TailDesk-Setup-$version.exe"
 
       - name: Package the source and publish a versioned GitHub release

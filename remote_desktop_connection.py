@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import atexit
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import sys
 import threading
@@ -11,10 +12,11 @@ import webbrowser
 from pathlib import Path
 from tkinter import Tk, messagebox, simpledialog
 
-from taildesk.config import ConfigStore
+from taildesk.config import APP_DIR, ConfigStore
 from taildesk.display import DisplayController
 from taildesk.server import create_app, find_tailscale_ipv4
 from taildesk.startup import set_startup
+from taildesk.network import HostListeners
 from taildesk.tray import create_tray
 from taildesk.tailscale_serve import configure_https
 from taildesk.updater import check_startup_update, configure_updates
@@ -55,7 +57,11 @@ def make_password(store: ConfigStore) -> bool:
 
 
 def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[RotatingFileHandler(APP_DIR / "taildesk.log", maxBytes=1_000_000, backupCount=2, encoding="utf-8")],
+    )
     if os.name != "nt":
         raise SystemExit("TailDesk currently runs on Windows 11.")
 
@@ -77,11 +83,19 @@ def main() -> int:
     atexit.register(connection_state.disconnect)
 
     host = settings.get("bind_host", "auto")
-    if host == "auto":
-        host = find_tailscale_ipv4() or "127.0.0.1"
     port = int(settings.get("port", 8765))
+    listeners = HostListeners(app, host, port, find_tailscale_ipv4)
+    try:
+        listeners.start()
+    except (OSError, ValueError):
+        connection_state.disconnect()
+        listeners.close()
+        raise
+    atexit.register(listeners.close)
 
-    if settings.get("tailscale_https", True):
+    def setup_https() -> None:
+        if not settings.get("tailscale_https", True):
+            return
         serve_url, serve_error, managed_port = configure_https(True, port, settings.get("tailscale_https_port"))
         app.config["TAILDESK_SERVE_URL"] = serve_url
         app.config["TAILDESK_SERVE_ERROR"] = serve_error
@@ -92,28 +106,11 @@ def main() -> int:
         elif serve_url:
             LOG.info("Private HTTPS URL: %s", serve_url)
 
-    # Waitress is a production WSGI server, unlike Flask's development server.
-    from waitress import serve
-
-    server_thread = threading.Thread(
-        target=lambda: serve(app, host=host, port=port, threads=8, clear_untrusted_proxy_headers=True),
-        name="taildesk-http",
-        daemon=True,
-    )
-    server_thread.start()
-    if host != "127.0.0.1":
-        threading.Thread(
-            target=lambda: serve(app, host="127.0.0.1", port=port, threads=4, clear_untrusted_proxy_headers=True),
-            name="taildesk-loopback-http",
-            daemon=True,
-        ).start()
+    # Optional HTTPS setup must not delay the tray or local recovery settings.
+    threading.Thread(target=setup_https, daemon=True, name="taildesk-https-setup").start()
 
     local_url = f"http://127.0.0.1:{port}/"
-    LOG.info("TailDesk is listening on %s:%s", host, port)
-    if host == "127.0.0.1":
-        LOG.warning("Tailscale was not detected. Remote access is disabled; connect Tailscale or set the bind address in settings.")
-    elif "--minimized" not in sys.argv:
-        LOG.info("Connect from another Tailnet device at http://%s:%s", host, port)
+    LOG.info("Host settings ready at %s", local_url)
 
     tray = create_tray(
         on_open=lambda: webbrowser.open(local_url),
@@ -124,11 +121,26 @@ def main() -> int:
     )
     if "--minimized" not in sys.argv:
         webbrowser.open(local_url)
-    tray.run()
-    connection_state.disconnect()
-    display.restore()
+    try:
+        tray.run()
+    finally:
+        connection_state.disconnect()
+        display.restore()
+        listeners.close()
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        LOG.exception("TailDesk could not start")
+        root = Tk()
+        root.withdraw()
+        messagebox.showerror(
+            APP_NAME,
+            f"TailDesk could not start:\n{exc}\n\nIf it is already running, use its tray icon. "
+            f"Details are saved in {APP_DIR / 'taildesk.log'}.", parent=root,
+        )
+        root.destroy()
+        raise SystemExit(1)

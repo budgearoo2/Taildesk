@@ -43,8 +43,13 @@ class POINTL(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
 
-class MODE_UNION(ctypes.Union):
+class DISPLAY_FIELDS(ctypes.Structure):
     _fields_ = [("position", POINTL), ("orientation", ctypes.c_uint32), ("fixed_output", ctypes.c_uint32)]
+
+
+class MODE_UNION(ctypes.Union):
+    _anonymous_ = ("display",)
+    _fields_ = [("display", DISPLAY_FIELDS), ("printer", ctypes.c_byte * 16)]
 
 
 class DEVMODEW(ctypes.Structure):
@@ -74,12 +79,31 @@ class DisplayController:
         self._last_request: tuple[int, int] | None = None
         self._last_observed: tuple[int, int] | None = None
         self._last_result = False
+        self._device: str | None = None
+
+    def select_monitor(self, device: str) -> None:
+        with self._lock:
+            if device != self._device:
+                self.restore()
+                self._device = device
+
+    def _change_mode(self, api, mode):
+        if self._device is None:
+            return api.ChangeDisplaySettingsW(ctypes.byref(mode), 0x00000004)
+        return api.ChangeDisplaySettingsExW(self._device, ctypes.byref(mode), None, 0x00000004, None)
 
     @staticmethod
     def _api():
         if os.name != "nt":
             return None
-        return ctypes.windll.user32
+        api = ctypes.windll.user32
+        api.EnumDisplaySettingsW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.POINTER(DEVMODEW)]
+        api.EnumDisplaySettingsW.restype = ctypes.c_int
+        api.ChangeDisplaySettingsW.argtypes = [ctypes.POINTER(DEVMODEW), ctypes.c_uint32]
+        api.ChangeDisplaySettingsW.restype = ctypes.c_long
+        api.ChangeDisplaySettingsExW.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(DEVMODEW), ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p]
+        api.ChangeDisplaySettingsExW.restype = ctypes.c_long
+        return api
 
     def resize(self, width: int, height: int) -> bool:
         api = self._api()
@@ -88,7 +112,7 @@ class DisplayController:
         with self._lock:
             current = DEVMODEW()
             current.size = ctypes.sizeof(DEVMODEW)
-            if not api.EnumDisplaySettingsW(None, -1, ctypes.byref(current)):
+            if not api.EnumDisplaySettingsW(self._device, -1, ctypes.byref(current)):
                 return False
             if self._original is None:
                 self._original = DEVMODEW.from_buffer_copy(current)
@@ -110,13 +134,13 @@ class DisplayController:
             target.width, target.height = width, height
             target.fields = 0x00080000 | 0x00100000  # DM_PELSWIDTH | DM_PELSHEIGHT
             # CDS_FULLSCREEN applies the mode for the current session only.
-            result = api.ChangeDisplaySettingsW(ctypes.byref(target), 0x00000004)
+            result = self._change_mode(api, target)
             applied = result == 0
             if applied:
                 self._changed = True
             observed = DEVMODEW()
             observed.size = ctypes.sizeof(DEVMODEW)
-            if api.EnumDisplaySettingsW(None, -1, ctypes.byref(observed)):
+            if api.EnumDisplaySettingsW(self._device, -1, ctypes.byref(observed)):
                 self._last_observed = (observed.width, observed.height)
             else:
                 self._last_observed = current_size
@@ -132,7 +156,9 @@ class DisplayController:
             try:
                 # Reapplying the captured driver mode restores the native mode.
                 if self._changed and self._original is not None:
-                    api.ChangeDisplaySettingsW(ctypes.byref(self._original), 0x00000004)
+                    result = self._change_mode(api, self._original)
+                    if result != 0:
+                        LOG.warning("Display restoration was rejected for %s (code %s)", self._device, result)
             except Exception:
                 LOG.exception("Could not restore the original display resolution")
             finally:

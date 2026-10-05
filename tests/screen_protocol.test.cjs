@@ -2,6 +2,32 @@ const assert = require("node:assert/strict");
 const { Buffer } = require("node:buffer");
 const test = require("node:test");
 
+test("decodes tiles concurrently within a fixed limit and closes every bitmap", async () => {
+  const tiles = Array.from({ length: 20 }, (_, x) => ({ x, y: 0, width: 1, height: 1, jpeg: x }));
+  let active = 0, peak = 0, closed = 0, drawn = 0;
+  await globalThis.TailDeskScreenProtocol.drawDeltaFrame({ drawImage() { drawn++; } }, { tiles }, async () => {
+    peak = Math.max(peak, ++active);
+    await new Promise(setImmediate);
+    active--;
+    return { close() { closed++; } };
+  });
+  assert.equal(peak, 8);
+  assert.equal(closed, 20);
+  assert.equal(drawn, 20);
+});
+
+test("a screen switch stops old tile drawing and still releases decoded bitmaps", async () => {
+  let current = true, closed = 0, drawn = 0;
+  const tiles = Array.from({ length: 20 }, () => ({ jpeg: 1 }));
+  await globalThis.TailDeskScreenProtocol.drawDeltaFrame({ drawImage() { drawn++; } }, { tiles }, async () => {
+    await new Promise(setImmediate);
+    current = false;
+    return { close() { closed++; } };
+  }, () => current);
+  assert.equal(drawn, 0);
+  assert.equal(closed, 8);
+});
+
 require("../taildesk/web/screen_protocol.js");
 
 function frame({ width = 640, height = 480, x = 10, y = 20, tileWidth = 2, tileHeight = 2, jpeg = [0xff, 0xd8, 0xff, 0xd9] } = {}) {

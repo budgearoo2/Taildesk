@@ -26,8 +26,28 @@ test("coalesces stale pointer moves but preserves button transition order", asyn
 
   assert.deepEqual(calls, [
     ["move", { x: 1 }],
+    ["move", { x: 3 }],
     ["mouse_down", { x: 3, button: "left" }],
     ["mouse_up", { x: 3, button: "left" }],
-    ["move", { x: 3 }],
+  ]);
+});
+
+test("motion stays on the correct side of drag and key transitions even after a failed send", async () => {
+  const calls = [];
+  const queue = globalThis.TailDeskInputQueue.create(async (kind, values) => {
+    calls.push([kind, values]);
+    if (kind === "move" && values.x === 2) throw new Error("network failure");
+  });
+  queue.enqueue("move", { x: 1 });
+  queue.enqueue("move", { x: 2 });
+  queue.enqueue("mouse_down", { button: "left", x: 2 });
+  queue.enqueue("move", { x: 3 });
+  queue.enqueue("move", { x: 4 });
+  queue.enqueue("mouse_up", { button: "left", x: 4 });
+  queue.enqueue("down", { key: "a" });
+  queue.enqueue("up", { key: "a" });
+  await queue.idle();
+  assert.deepEqual(calls.map(([kind, values]) => [kind, values.x ?? values.key]), [
+    ["move", 2], ["mouse_down", 2], ["move", 4], ["mouse_up", 4], ["down", "a"], ["up", "a"],
   ]);
 });

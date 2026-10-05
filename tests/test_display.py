@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import unittest
+import ctypes
+import os
 
-from taildesk.display import DisplayController
+from taildesk.display import DisplayController, DEVMODEW
 
 
 class FakeDisplayApi:
@@ -26,6 +28,40 @@ class FakeDisplayApi:
 
 
 class DisplayControllerTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows DEVMODEW ABI")
+    def test_windows_display_mode_layout_matches_native_structure(self):
+        self.assertEqual(ctypes.sizeof(DEVMODEW), 220)
+        self.assertEqual(DEVMODEW.width.offset, 172)
+        self.assertEqual(DEVMODEW.height.offset, 176)
+
+    def test_switching_restores_previous_device_and_disconnect_restores_selected_device(self):
+        class MultiApi:
+            def __init__(self):
+                self.modes = {"display-1": (1920, 1080), "display-2": (2560, 1440)}
+                self.calls = []
+
+            def EnumDisplaySettingsW(self, device, _mode, target):
+                target._obj.width, target._obj.height = self.modes[device]
+                return 1
+
+            def ChangeDisplaySettingsExW(self, device, target, _hwnd, _flags, _data):
+                size = (target._obj.width, target._obj.height)
+                self.calls.append((device, size))
+                self.modes[device] = size
+                return 0
+
+        api = MultiApi()
+        display = DisplayController()
+        display._api = lambda: api
+        display.select_monitor("display-1")
+        display.resize(1280, 720)
+        display.select_monitor("display-2")
+        self.assertEqual(api.modes["display-1"], (1920, 1080))
+        display.resize(1280, 720)
+        display.restore()
+        self.assertEqual(api.modes["display-2"], (2560, 1440))
+        self.assertEqual(len(api.calls), 4)
+
     def test_repeated_heartbeat_size_does_not_reapply_display_mode(self) -> None:
         api = FakeDisplayApi(1920, 1080)
         display = DisplayController()
