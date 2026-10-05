@@ -24,5 +24,5 @@ jobs:
           Set-Content -Path .\taildesk\__init__.py -Value "__version__ = `"$version`"" -Encoding utf8
           New-Item -ItemType Directory -Path .\dist -Force | Out-Null
           $archive = ".\dist\TailDesk-$version.zip"
-          Compress-Archive -Path .\remote_desktop_connection.py, .\taildesk, .\requirements.txt, .\README.md, .\UPDATE_PIPELINE.md, .\AGENTS.md -DestinationPath $archive -Force
+          Compress-Archive -Path .\remote_desktop_connection.py, .\taildesk, .\requirements.txt, .\README.md, .\UPDATE_PIPELINE.md, .\AGENTS.md, .\THIRD_PARTY_NOTICES.md -DestinationPath $archive -Force
           gh release create "v$version" $archive --target $env:GITHUB_SHA --title "TailDesk $version" --generate-notes

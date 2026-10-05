@@ -1,14 +1,24 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const desktop = $("desktop");
+  const screenContext = desktop.getContext("2d", { alpha: false });
   const clipboardText = $("clipboard-text");
+  const appleKeyboard = /Mac|iPhone|iPad/.test(navigator.platform || "");
   let active = false;
   let frameTimer;
   let heartbeatTimer;
   let clipboardTimer;
   let inputQueue = Promise.resolve();
   let held = new Set();
+  let heldButtons = new Set();
   let fps = 8;
+  let adaptiveFps = 6;
+  let fastFrames = 0;
+  let forceFullFrame = true;
+  let audioContext = null;
+  let audioPlaying = false;
+  let audioPollTimer;
+  let audioNextTime = 0;
   let lastHostClipboard = null;
   let toastTimer;
 
@@ -34,6 +44,10 @@
     clearTimeout(frameTimer);
     clearInterval(heartbeatTimer);
     clearInterval(clipboardTimer);
+    audioPlaying = false;
+    clearTimeout(audioPollTimer);
+    audioContext?.suspend();
+    $("audio-toggle").textContent = "Enable remote sound";
     $("login").classList.remove("hidden");
     $("connection").textContent = "Disconnected";
     $("connection").classList.remove("online");
@@ -41,19 +55,84 @@
 
   async function connect() {
     try {
-      await api("/api/state");
+      const state = await api("/api/state");
+      fps = state.settings.fps;
       active = true;
+      adaptiveFps = Math.min(fps, 6);
+      forceFullFrame = true;
       $("login").classList.add("hidden");
       $("connection").textContent = "Connected";
       $("connection").classList.add("online");
       await heartbeat();
+      const connectedState = await api("/api/state");
+      updateAudioStatus(connectedState.audio);
       refreshFrame();
       heartbeatTimer = setInterval(() => heartbeat().catch(() => {}), 2500);
-      clipboardTimer = setInterval(() => readHostClipboard(false), 900);
+      clipboardTimer = setInterval(readHostClipboard, 900);
     } catch (_) {
       showLogin();
     }
   }
+
+  function updateAudioStatus(status) {
+    $("audio-status").textContent = status?.message || "Remote audio is unavailable.";
+    $("audio-toggle").disabled = !status?.available;
+  }
+
+  async function pollAudio() {
+    if (!active || !audioPlaying || !audioContext) return;
+    let nextDelay = 0;
+    try {
+      const response = await fetch(`/api/audio?t=${Date.now()}`, { cache: "no-store" });
+      if (response.status === 204) nextDelay = 60;
+      else if (!response.ok) nextDelay = 250;
+      else {
+        const bytes = new DataView(await response.arrayBuffer());
+        const frames = bytes.byteLength / 4;
+        if (!Number.isInteger(frames) || frames < 1) throw new Error("Invalid audio frame");
+        const buffer = audioContext.createBuffer(2, frames, 48000);
+        const left = buffer.getChannelData(0);
+        const right = buffer.getChannelData(1);
+        for (let index = 0; index < frames; index++) {
+          left[index] = bytes.getInt16(index * 4, true) / 32768;
+          right[index] = bytes.getInt16(index * 4 + 2, true) / 32768;
+        }
+        const now = audioContext.currentTime;
+        if (audioNextTime < now) audioNextTime = now + 0.04;
+        const source = audioContext.createBufferSource();
+        source.buffer = buffer;
+        source.connect(audioContext.destination);
+        source.start(audioNextTime);
+        audioNextTime += buffer.duration;
+        nextDelay = 0;
+      }
+    } catch (_) {
+      nextDelay = 200;
+    }
+    if (audioPlaying) audioPollTimer = setTimeout(pollAudio, nextDelay);
+  }
+
+  $("audio-toggle").addEventListener("click", async () => {
+    if (audioPlaying) {
+      audioPlaying = false;
+      clearTimeout(audioPollTimer);
+      await audioContext?.suspend();
+      $("audio-toggle").textContent = "Enable remote sound";
+      return;
+    }
+    try {
+      const Context = window.AudioContext || window.webkitAudioContext;
+      if (!Context) throw new Error("This browser does not support remote audio playback.");
+      audioContext ||= new Context();
+      await audioContext.resume();
+      audioNextTime = audioContext.currentTime + 0.04;
+      audioPlaying = true;
+      $("audio-toggle").textContent = "Mute remote sound";
+      pollAudio();
+    } catch (error) {
+      toast(error.message || "Allow audio playback in your browser, then try again.");
+    }
+  });
 
   $("login-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -96,18 +175,60 @@
 
   function refreshFrame() {
     if (!active) return;
-    desktop.onload = () => {
-      frameTimer = setTimeout(refreshFrame, Math.max(50, 1000 / fps));
-    };
-    desktop.onerror = () => {
-      frameTimer = setTimeout(refreshFrame, 1000);
-    };
-    desktop.src = `/api/screen?t=${Date.now()}`;
+    const started = performance.now();
+    const url = `/api/screen?t=${Date.now()}${forceFullFrame ? "&full=1" : ""}`;
+    forceFullFrame = false;
+    fetch(url, { cache: "no-store" }).then(async (response) => {
+      if (response.status === 401) { showLogin(); return; }
+      if (response.status === 409) throw new Error("Desktop session ended");
+      if (response.status === 204) return;
+      if (!response.ok) throw new Error(`Screen request failed (${response.status})`);
+      const type = response.headers.get("content-type") || "";
+      if (type.includes("application/json")) {
+        const update = await response.json();
+        if (desktop.width !== update.width || desktop.height !== update.height) {
+          forceFullFrame = true;
+          return;
+        }
+        for (const tile of update.tiles) {
+          const bytes = Uint8Array.from(atob(tile.jpeg), (character) => character.charCodeAt(0));
+          const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
+          screenContext.drawImage(bitmap, tile.x, tile.y);
+          bitmap.close();
+        }
+      } else {
+        const bitmap = await createImageBitmap(await response.blob());
+        if (desktop.width !== bitmap.width || desktop.height !== bitmap.height) {
+          desktop.width = bitmap.width;
+          desktop.height = bitmap.height;
+        }
+        screenContext.drawImage(bitmap, 0, 0);
+        bitmap.close();
+      }
+    }).catch((error) => {
+      forceFullFrame = true;
+      if (error.message === "Desktop session ended") toast(error.message);
+    }).finally(() => {
+      if (!active) return;
+      const elapsed = performance.now() - started;
+      const budget = 1000 / Math.max(1, adaptiveFps);
+      if (elapsed > budget * 1.15) {
+        adaptiveFps = Math.max(1, adaptiveFps * 0.8);
+        fastFrames = 0;
+      } else if (elapsed < budget * 0.55) {
+        if (++fastFrames >= 8) {
+          adaptiveFps = Math.min(fps, adaptiveFps + 1);
+          fastFrames = 0;
+        }
+      } else {
+        fastFrames = 0;
+      }
+      frameTimer = setTimeout(refreshFrame, Math.max(0, 1000 / adaptiveFps - elapsed));
+    });
   }
 
   function input(kind, values = {}) {
-    // Preserve key down/up ordering. Mouse click requests also carry coordinates,
-    // so a click cannot race a separate pointer-move request.
+    // Preserve key and mouse down/up ordering across HTTP requests.
     inputQueue = inputQueue
       .then(() =>
         api("/api/input", {
@@ -139,23 +260,39 @@
       setTimeout(() => {
         movePending = false;
         if (latestMove) input("move", latestMove);
-      }, 40);
+      }, 16);
     }
   });
   desktop.addEventListener("pointerdown", (event) => {
     desktop.focus();
+    desktop.setPointerCapture?.(event.pointerId);
     const button = event.button === 2 ? "right" : event.button === 1 ? "middle" : "left";
-    input("click", { ...screenPoint(event), button });
+    heldButtons.add(button);
+    input("mouse_down", { ...screenPoint(event), button });
     event.preventDefault();
+  });
+  function releaseButton(event) {
+    const button = event.button === 2 ? "right" : event.button === 1 ? "middle" : "left";
+    if (!heldButtons.has(button)) return;
+    heldButtons.delete(button);
+    input("mouse_up", { ...screenPoint(event), button });
+  }
+  desktop.addEventListener("pointerup", releaseButton);
+  desktop.addEventListener("pointercancel", (event) => {
+    const point = screenPoint(event);
+    for (const button of heldButtons) input("mouse_up", { ...point, button });
+    heldButtons.clear();
   });
   desktop.addEventListener("contextmenu", (event) => event.preventDefault());
   desktop.addEventListener("wheel", (event) => {
-    input("scroll", { amount: event.deltaY < 0 ? 3 : -3 });
+    const factor = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? window.innerHeight : 1;
+    input("scroll", { delta: event.deltaY * factor });
     event.preventDefault();
   }, { passive: false });
 
   const aliases = {
-    Control: "ctrl", Shift: "shift", Alt: "alt", Meta: "win", " ": "space",
+    Control: "ctrl", Shift: "shift", Alt: "alt", Meta: appleKeyboard ? "ctrl" : "win", " ": "space",
     ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right",
     Escape: "esc", Backspace: "backspace", Delete: "delete", Enter: "enter",
     Tab: "tab", CapsLock: "capslock", PageUp: "pageup", PageDown: "pagedown",
@@ -170,7 +307,8 @@
   desktop.addEventListener("keydown", (event) => {
     if (["F5", "F11"].includes(event.key)) return;
     event.preventDefault();
-    if (event.ctrlKey && event.key.toLowerCase() === "v") {
+    const shortcut = event.ctrlKey || (appleKeyboard && event.metaKey);
+    if (shortcut && event.key.toLowerCase() === "v") {
       pasteToHost(true);
       return;
     }
@@ -178,9 +316,11 @@
     if (key && !held.has(key)) {
       held.add(key);
       input("down", { key });
+    } else if (key && event.repeat) {
+      input("down", { key, repeat: true });
     }
-    if (event.ctrlKey && event.key.toLowerCase() === "c") {
-      setTimeout(() => readHostClipboard(true), 500);
+    if (shortcut && event.key.toLowerCase() === "c") {
+      setTimeout(readHostClipboard, 500);
     }
   });
   desktop.addEventListener("keyup", (event) => {
@@ -194,9 +334,11 @@
   function releaseKeys() {
     for (const key of held) input("up", { key });
     held.clear();
+    for (const button of heldButtons) input("mouse_up", { ...(latestMove || { x: 0, y: 0 }), button });
+    heldButtons.clear();
   }
 
-  async function readHostClipboard(showFallback) {
+  async function readHostClipboard() {
     if (!active) return;
     try {
       const data = await api("/api/clipboard");
@@ -206,17 +348,15 @@
       if (window.isSecureContext && navigator.clipboard?.writeText) {
         try {
           await navigator.clipboard.writeText(data.text);
+          $("clipboard-fallback").classList.add("hidden");
         } catch (_) {
-          if (showFallback) {
-            clipboardText.value = data.text;
-            $("clipboard-fallback").classList.remove("hidden");
-            toast("Browser clipboard permission was denied. Copy the host text from the clipboard panel.");
-          }
+          clipboardText.value = data.text;
+          $("clipboard-fallback").classList.remove("hidden");
         }
-      } else if (showFallback) {
+      } else {
         clipboardText.value = data.text;
         $("clipboard-fallback").classList.remove("hidden");
-        toast("Host clipboard loaded. Use “Copy to laptop clipboard”.");
+        toast("Host clipboard loaded; use the copy button.");
       }
     } catch (_) {}
   }

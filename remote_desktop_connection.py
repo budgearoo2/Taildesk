@@ -12,6 +12,7 @@ from pathlib import Path
 from tkinter import Tk, messagebox, simpledialog
 
 from taildesk.config import ConfigStore
+from taildesk.audio import AudioRouter
 from taildesk.display import DisplayController
 from taildesk.server import create_app, find_tailscale_ipv4
 from taildesk.startup import set_startup
@@ -70,6 +71,7 @@ def main() -> int:
     atexit.register(display.restore)
     app = create_app(store=store, display=display)
     connection_state = app.config["TAILDESK_STATE"]
+    atexit.register(connection_state.disconnect)
 
     host = settings.get("bind_host", "auto")
     if host == "auto":
@@ -114,6 +116,7 @@ def main() -> int:
         on_open=lambda: webbrowser.open(app.config.get("TAILDESK_SERVE_URL") or f"http://{host}:{port}/"),
         connected=lambda: bool(connection_state.connected),
         on_quit=connection_state.disconnect,
+        on_install_audio=AudioRouter.open_driver_setup,
     )
     if "--minimized" not in sys.argv:
         webbrowser.open(local_url)

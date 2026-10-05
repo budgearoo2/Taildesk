@@ -17,13 +17,19 @@ def _image(connected: bool) -> Image.Image:
     return image
 
 
-def create_tray(on_open: Callable[[], None], connected: Callable[[], bool], on_quit: Callable[[], None]):
+def create_tray(
+    on_open: Callable[[], None],
+    connected: Callable[[], bool],
+    on_quit: Callable[[], None],
+    on_install_audio: Callable[[], None],
+):
     icon = pystray.Icon(
         "TailDesk",
         _image(False),
         "TailDesk — disconnected",
         pystray.Menu(
             pystray.MenuItem("Open TailDesk settings", lambda icon, item: on_open(), default=True),
+            pystray.MenuItem("Install virtual audio device", lambda icon, item: on_install_audio()),
             pystray.MenuItem("Quit TailDesk", lambda icon, item: (on_quit(), icon.stop())),
         ),
     )

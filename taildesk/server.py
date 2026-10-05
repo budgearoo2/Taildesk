@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import ipaddress
+import base64
+import ctypes
 import logging
 import mimetypes
 import os
@@ -19,8 +21,9 @@ import mss
 import pyautogui
 import pyperclip
 from flask import Flask, abort, jsonify, make_response, render_template, request, send_file, session
-from PIL import Image
+from PIL import Image, ImageChops
 
+from taildesk.audio import AudioRouter
 from taildesk.config import ConfigStore, DEFAULT_TRANSFER_DIR
 from taildesk.display import DisplayController
 from taildesk.startup import set_startup
@@ -53,11 +56,14 @@ def _pointer_position(data: dict[str, Any]) -> tuple[int, int]:
 class ConnectionState:
     def __init__(self, display: DisplayController):
         self.display = display
+        self.audio = AudioRouter()
         self.lock = threading.RLock()
         self.last_seen: float | None = None
         self.connected = False
         self.owner: str | None = None
         self.held_keys: set[str] = set()
+        self.held_buttons: set[str] = set()
+        self.previous_frame: Image.Image | None = None
         self._stop = threading.Event()
         threading.Thread(target=self._watchdog, daemon=True, name="taildesk-connection-watchdog").start()
 
@@ -65,10 +71,17 @@ class ConnectionState:
         with self.lock:
             if self.connected and self.owner != owner:
                 return False
+            new_connection = self.owner != owner
+            if self.owner != owner:
+                self.previous_frame = None
             self.connected = True
             self.owner = owner
             self.last_seen = time.monotonic()
         self.display.resize(width, height)
+        if new_connection:
+            with self.lock:
+                if self.connected and self.owner == owner:
+                    self.audio.connect()
         return True
 
     def can_control(self, owner: str | None) -> bool:
@@ -80,28 +93,54 @@ class ConnectionState:
             if owner is not None and self.owner != owner:
                 return
             keys = tuple(self.held_keys)
+            buttons = tuple(self.held_buttons)
             self.held_keys.clear()
+            self.held_buttons.clear()
+            self.previous_frame = None
             self.connected = False
             self.last_seen = None
             self.owner = None
+        self.audio.disconnect()
         for key in keys:
             try:
                 pyautogui.keyUp(key)
             except Exception:
                 LOG.exception("Could not release a held input key")
+        for button in buttons:
+            try:
+                pyautogui.mouseUp(button=button)
+            except Exception:
+                LOG.exception("Could not release a held mouse button")
         self.display.restore()
 
-    def key_down(self, key: str) -> None:
+    def key_down(self, key: str, repeat: bool = False) -> None:
         with self.lock:
             if key not in self.held_keys:
                 pyautogui.keyDown(key)
                 self.held_keys.add(key)
+            elif repeat:
+                # Browser key-repeat events must reach Windows while held.
+                pyautogui.keyDown(key)
 
     def key_up(self, key: str) -> None:
         with self.lock:
             if key in self.held_keys:
                 pyautogui.keyUp(key)
                 self.held_keys.discard(key)
+
+    def mouse_down(self, button: str, x: int, y: int) -> None:
+        with self.lock:
+            pyautogui.moveTo(x, y)
+            if button not in self.held_buttons:
+                pyautogui.mouseDown(button=button)
+                self.held_buttons.add(button)
+
+    def mouse_up(self, button: str, x: int, y: int) -> None:
+        with self.lock:
+            pyautogui.moveTo(x, y)
+            if button in self.held_buttons:
+                pyautogui.mouseUp(button=button)
+                self.held_buttons.discard(button)
 
     def _watchdog(self) -> None:
         while not self._stop.wait(1):
@@ -219,6 +258,7 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
             settings=store.public(),
             https_url=app.config.get("TAILDESK_SERVE_URL"),
             https_error=app.config.get("TAILDESK_SERVE_ERROR"),
+            audio=state.audio.status(),
         )
 
     @app.post("/api/heartbeat")
@@ -244,16 +284,57 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
             with mss.mss() as capture:
                 frame = capture.grab(capture.monitors[1])
                 image = Image.frombytes("RGB", frame.size, frame.rgb)
+            tile_size = 128
+            with state.lock:
+                if not state.connected or state.owner != session.get("client_id"):
+                    return jsonify(error="This browser does not own the active desktop session."), 409
+                previous = state.previous_frame
+                full = request.args.get("full") == "1" or previous is None or previous.size != image.size
+                if not full:
+                    changed: list[tuple[int, int, Image.Image]] = []
+                    for y in range(0, image.height, tile_size):
+                        for x in range(0, image.width, tile_size):
+                            box = (x, y, min(x + tile_size, image.width), min(y + tile_size, image.height))
+                            current_tile = image.crop(box)
+                            previous_tile = previous.crop(box)
+                            if ImageChops.difference(current_tile, previous_tile).getbbox():
+                                changed.append((x, y, current_tile))
+                    total_tiles = ((image.width + tile_size - 1) // tile_size) * ((image.height + tile_size - 1) // tile_size)
+                    full = len(changed) > total_tiles * 0.55
+                state.previous_frame = image.copy()
+            if full:
                 output = io.BytesIO()
                 image.save(output, format="JPEG", quality=quality, optimize=True)
-            response = make_response(output.getvalue())
-            response.headers["Content-Type"] = "image/jpeg"
+                response = make_response(output.getvalue())
+                response.headers["Content-Type"] = "image/jpeg"
+            elif not changed:
+                response = make_response("", 204)
+            else:
+                tiles = []
+                for x, y, tile in changed:
+                    output = io.BytesIO()
+                    tile.save(output, format="JPEG", quality=quality, optimize=True)
+                    tiles.append({"x": x, "y": y, "width": tile.width, "height": tile.height,
+                                  "jpeg": base64.b64encode(output.getvalue()).decode("ascii")})
+                response = make_response(jsonify(width=image.width, height=image.height, tiles=tiles))
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-Content-Type-Options"] = "nosniff"
             return response
         except Exception:
             LOG.exception("Screen capture failed")
             return jsonify(error="Screen capture failed"), 500
+
+    @app.get("/api/audio")
+    def audio_chunk():
+        if not state.can_control(session.get("client_id")):
+            return jsonify(error="This browser does not own the active desktop session."), 409
+        chunk = state.audio.next_chunk()
+        if chunk is None:
+            return make_response("", 204)
+        response = make_response(chunk)
+        response.headers["Content-Type"] = "application/octet-stream"
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.post("/api/input")
     def input_event():
@@ -272,13 +353,30 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
                 x, y = _pointer_position(data)
                 pyautogui.moveTo(x, y)
             pyautogui.click(button=button)
+        elif kind in {"mouse_down", "mouse_up"}:
+            button = data.get("button", "left")
+            if button not in {"left", "right", "middle"}:
+                abort(400)
+            x, y = _pointer_position(data)
+            (state.mouse_down if kind == "mouse_down" else state.mouse_up)(button, x, y)
         elif kind in {"down", "up"}:
             key = str(data.get("key", ""))
             if key not in pyautogui.KEYBOARD_KEYS:
                 abort(400)
-            (state.key_down if kind == "down" else state.key_up)(key)
+            if kind == "down":
+                state.key_down(key, bool(data.get("repeat", False)))
+            else:
+                state.key_up(key)
         elif kind == "scroll":
-            pyautogui.scroll(max(-20, min(20, int(data.get("amount", 0)))))
+            try:
+                wheel_delta = max(-2400, min(2400, round(-float(data.get("delta", 0)) * 3)))
+            except (TypeError, ValueError):
+                abort(400)
+            if wheel_delta:
+                mouse_event = ctypes.windll.user32.mouse_event
+                mouse_event.argtypes = [ctypes.c_uint32, ctypes.c_int32, ctypes.c_int32, ctypes.c_uint32, ctypes.c_size_t]
+                mouse_event.restype = None
+                mouse_event(0x0800, 0, 0, ctypes.c_uint32(wheel_delta).value, 0)
         else:
             abort(400)
         return jsonify(ok=True)

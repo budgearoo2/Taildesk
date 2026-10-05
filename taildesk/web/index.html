@@ -12,17 +12,19 @@
     <span id="connection" class="connection">Disconnected</span>
     <span class="spacer"></span>
     <button id="fullscreen">Fullscreen</button>
+    <button id="audio-toggle" class="quiet" disabled>Enable remote sound</button>
+    <span id="audio-status" class="audio-status" role="status" aria-live="polite"></span>
     <button id="clipboard">Clipboard</button>
     <button id="files-toggle">Files</button>
     <button id="settings-toggle">Settings</button>
     <button id="sign-out" class="quiet">Sign out</button>
   </header>
   <main>
-    <img id="desktop" alt="Remote Windows desktop" draggable="false" tabindex="0">
+    <canvas id="desktop" aria-label="Remote Windows desktop" tabindex="0"></canvas>
     <section id="clipboard-fallback" class="clipboard-fallback hidden">
-      <label for="clipboard-text">Clipboard text</label>
+      <label for="clipboard-text">Host clipboard text</label>
       <textarea id="clipboard-text" rows="4"></textarea>
-      <button id="copy-fallback">Copy to laptop clipboard</button>
+      <button id="copy-fallback">Copy to this device</button>
       <button id="send-fallback" class="quiet">Send to host</button>
     </section>
   </main>
@@ -56,7 +58,7 @@
       <p class="hint">“auto” binds to the Tailnet IPv4 address. “127.0.0.1” allows this PC only. A specific IPv4 address can bind to one local interface.</p>
       <div class="columns">
         <div><label for="port">Port</label><input id="port" type="number" min="1024" max="65535"></div>
-        <div><label for="fps">Frame rate</label><input id="fps" type="number" min="1" max="20"></div>
+        <div><label for="fps">Max frame rate</label><input id="fps" type="number" min="1" max="20"></div>
         <div><label for="quality">JPEG quality</label><input id="quality" type="number" min="25" max="90"></div>
       </div>
       <label for="transfer-folder">Transfer folder</label>
