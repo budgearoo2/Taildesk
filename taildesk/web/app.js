@@ -8,11 +8,19 @@
   let frameTimer;
   let heartbeatTimer;
   let clipboardTimer;
-  let inputQueue = Promise.resolve();
+  const inputQueue = window.TailDeskInputQueue.create((kind, values) =>
+    api("/api/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind, ...values }),
+    }),
+  );
   let held = new Set();
   let heldButtons = new Set();
   let fps = 8;
   let adaptiveFps = 6;
+  let configuredQuality = 65;
+  let adaptiveQuality = 65;
   let fastFrames = 0;
   let forceFullFrame = true;
   let audioContext = null;
@@ -59,8 +67,10 @@
     try {
       const state = await api("/api/state");
       fps = state.settings.fps;
+      configuredQuality = state.settings.jpeg_quality;
       active = true;
-      adaptiveFps = Math.min(fps, 6);
+      adaptiveFps = Math.min(fps, 12);
+      adaptiveQuality = configuredQuality;
       forceFullFrame = true;
       $("login").classList.add("hidden");
       $("sign-out").classList.toggle("hidden", !!state.local_access);
@@ -215,7 +225,7 @@
   function refreshFrame() {
     if (!active) return;
     const started = performance.now();
-    const url = `/api/screen?t=${Date.now()}${forceFullFrame ? "&full=1" : ""}`;
+    const url = `/api/screen?t=${Date.now()}&q=${adaptiveQuality}${forceFullFrame ? "&full=1" : ""}`;
     forceFullFrame = false;
     fetch(url, { cache: "no-store" }).then(async (response) => {
       if (response.status === 401) { showLogin(); return; }
@@ -223,20 +233,20 @@
       if (response.status === 204) return;
       if (!response.ok) throw new Error(`Screen request failed (${response.status})`);
       const type = response.headers.get("content-type") || "";
-      if (type.includes("application/json")) {
-        const update = await response.json();
+      if (type.includes("application/vnd.taildesk.tiles")) {
+        const bytes = await response.arrayBuffer();
+        const update = window.TailDeskScreenProtocol.decodeDeltaFrame(bytes);
         if (desktop.width !== update.width || desktop.height !== update.height) {
           forceFullFrame = true;
           return;
         }
         for (const tile of update.tiles) {
-          const bytes = Uint8Array.from(atob(tile.jpeg), (character) => character.charCodeAt(0));
-          const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
-          screenContext.drawImage(bitmap, tile.x, tile.y);
+          const bitmap = await createImageBitmap(tile.jpeg);
+          screenContext.drawImage(bitmap, tile.x, tile.y, tile.width, tile.height);
           bitmap.close();
         }
       } else {
-        const bitmap = await createImageBitmap(await response.blob());
+        const bitmap = await createImageBitmap(new Blob([await response.arrayBuffer()], { type: "image/jpeg" }));
         if (desktop.width !== bitmap.width || desktop.height !== bitmap.height) {
           desktop.width = bitmap.width;
           desktop.height = bitmap.height;
@@ -250,34 +260,24 @@
     }).finally(() => {
       if (!active) return;
       const elapsed = performance.now() - started;
-      const budget = 1000 / Math.max(1, adaptiveFps);
-      if (elapsed > budget * 1.15) {
-        adaptiveFps = Math.max(1, adaptiveFps * 0.8);
-        fastFrames = 0;
-      } else if (elapsed < budget * 0.55) {
-        if (++fastFrames >= 8) {
-          adaptiveFps = Math.min(fps, adaptiveFps + 1);
-          fastFrames = 0;
-        }
-      } else {
-        fastFrames = 0;
-      }
+      const adjusted = window.TailDeskAdaptiveStream.adjust({
+        targetFps: fps,
+        fps: adaptiveFps,
+        quality: adaptiveQuality,
+        qualityCap: configuredQuality,
+        fastFrames,
+        elapsedMs: elapsed,
+      });
+      adaptiveFps = adjusted.fps;
+      adaptiveQuality = adjusted.quality;
+      fastFrames = adjusted.fastFrames;
       frameTimer = setTimeout(refreshFrame, Math.max(0, 1000 / adaptiveFps - elapsed));
     });
   }
 
   function input(kind, values = {}) {
-    // Preserve key and mouse down/up ordering across HTTP requests.
-    inputQueue = inputQueue
-      .then(() =>
-        api("/api/input", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ kind, ...values }),
-        }),
-      )
-      .catch(() => {});
-    return inputQueue;
+    // Coalesce pointer movement while preserving ordered key/button transitions.
+    return inputQueue.enqueue(kind, values);
   }
 
   function screenPoint(event) {
@@ -499,7 +499,10 @@
   $("settings-toggle").addEventListener("click", async () => {
     try {
       const data = await api("/api/settings");
+      const state = await api("/api/state");
+      updateAudioStatus(state.audio);
       fps = data.fps;
+      configuredQuality = data.jpeg_quality;
       $("bind-host").value = data.bind_host;
       $("port").value = data.port;
       $("fps").value = data.fps;
@@ -508,7 +511,6 @@
       $("clipboard-enabled").checked = data.clipboard_enabled;
       $("tailscale-https").checked = data.tailscale_https;
       $("startup").checked = data.startup;
-      const state = await api("/api/state");
       $("secure-url").textContent = state.https_url
         ? `Private HTTPS address: ${state.https_url}`
         : state.https_error || "Private HTTPS address is not available; direct Tailnet IP still works with manual clipboard controls.";
@@ -533,6 +535,8 @@
         }),
       });
       fps = data.settings.fps;
+      configuredQuality = data.settings.jpeg_quality;
+      adaptiveQuality = Math.min(adaptiveQuality, configuredQuality);
       $("settings").classList.add("hidden");
       if (data.restart_required) toast(data.https_url ? `Saved. Restart TailDesk to apply the port; secure URL: ${data.https_url}` : "Saved. Restart TailDesk to apply the bind address or port.");
       else if (data.https_url) toast(`Saved. Secure Tailnet URL: ${data.https_url}`);

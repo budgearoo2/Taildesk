@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import ipaddress
-import base64
 import ctypes
 import logging
 import mimetypes
@@ -29,6 +28,7 @@ from taildesk.config import ConfigStore, DEFAULT_TRANSFER_DIR
 from taildesk.display import DisplayController
 from taildesk.startup import set_startup
 from taildesk.tailscale_serve import configure_https
+from taildesk.video import effective_jpeg_quality, encode_delta_frame, validate_frame_rate
 from taildesk import __version__
 
 LOG = logging.getLogger("TailDesk.server")
@@ -311,7 +311,11 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
         if not state.can_control(session.get("client_id")):
             return jsonify(error="This browser does not own the active desktop session."), 409
         try:
-            quality = int(store.snapshot().get("jpeg_quality", 65))
+            # The browser may lower quality to keep a slow connection responsive,
+            # but it cannot exceed the quality limit configured by the host.
+            quality = effective_jpeg_quality(
+                store.snapshot().get("jpeg_quality", 65), request.args.get("q")
+            )
             with mss.mss() as capture:
                 frame = capture.grab(capture.monitors[1])
                 image = Image.frombytes("RGB", frame.size, frame.rgb)
@@ -323,13 +327,12 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
                 full = request.args.get("full") == "1" or previous is None or previous.size != image.size
                 if not full:
                     changed: list[tuple[int, int, Image.Image]] = []
+                    difference = ImageChops.difference(image, previous)
                     for y in range(0, image.height, tile_size):
                         for x in range(0, image.width, tile_size):
                             box = (x, y, min(x + tile_size, image.width), min(y + tile_size, image.height))
-                            current_tile = image.crop(box)
-                            previous_tile = previous.crop(box)
-                            if ImageChops.difference(current_tile, previous_tile).getbbox():
-                                changed.append((x, y, current_tile))
+                            if difference.crop(box).getbbox():
+                                changed.append((x, y, image.crop(box)))
                     total_tiles = ((image.width + tile_size - 1) // tile_size) * ((image.height + tile_size - 1) // tile_size)
                     full = len(changed) > total_tiles * 0.55
                 state.previous_frame = image.copy()
@@ -341,13 +344,10 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
             elif not changed:
                 response = make_response("", 204)
             else:
-                tiles = []
-                for x, y, tile in changed:
-                    output = io.BytesIO()
-                    tile.save(output, format="JPEG", quality=quality, optimize=True)
-                    tiles.append({"x": x, "y": y, "width": tile.width, "height": tile.height,
-                                  "jpeg": base64.b64encode(output.getvalue()).decode("ascii")})
-                response = make_response(jsonify(width=image.width, height=image.height, tiles=tiles))
+                # Binary delta frame format avoids JSON/base64's 33% payload
+                # expansion. Header: magic, screen width, screen height, tile count.
+                response = make_response(encode_delta_frame(image.width, image.height, changed, quality))
+                response.headers["Content-Type"] = "application/vnd.taildesk.tiles"
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-Content-Type-Options"] = "nosniff"
             return response
@@ -497,9 +497,10 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
                 return jsonify(error="Port must be from 1024 to 65535."), 400
             updates["port"] = port
         if "fps" in data:
-            fps = int(data["fps"])
-            if not 1 <= fps <= 20:
-                return jsonify(error="Frame rate must be from 1 to 20."), 400
+            try:
+                fps = validate_frame_rate(data["fps"])
+            except ValueError as exc:
+                return jsonify(error=str(exc)), 400
             updates["fps"] = fps
         if "jpeg_quality" in data:
             quality = int(data["jpeg_quality"])

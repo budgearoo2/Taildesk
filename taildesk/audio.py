@@ -164,7 +164,7 @@ class AudioRouter:
             threading.Thread(
                 target=self._watch_driver_install, args=(process,), name="taildesk-driver-install-watch", daemon=True
             ).start()
-            return "VB-Audio's installer opened on the host. Choose Install Driver there; TailDesk will update this status when it finishes. VB-CABLE is donationware."
+            return "The audio installer opened on the host. Choose Install Driver there; TailDesk will update this status when it finishes."
         except Exception:
             with self.lock:
                 self.installing = False
@@ -270,7 +270,7 @@ class AudioRouter:
         with self.lock:
             if self.device_id:
                 return {"available": True, "active": self.thread is not None and self.thread.is_alive(),
-                        "message": self.error or "Virtual speaker is routing audio to this remote session."}
+                        "message": self.error or "Remote audio is active for this session."}
             error = self.error
             installing = self.installing
         try:
@@ -280,10 +280,10 @@ class AudioRouter:
             device = None
         if device:
             return {"available": True, "active": False,
-                    "message": error or "Virtual speaker is installed; audio will switch on connection."}
+                    "message": error or "The audio device is ready and will switch on connection."}
         return {"available": False, "active": False, "installing": installing,
                 "message": error or ("Waiting for Windows administrator approval to install VB-CABLE."
-                                     if installing else "Install VB-CABLE from VB-Audio to enable remote sound.")}
+                                     if installing else "Install VB-CABLE to enable remote sound.")}
 
     def connect(self) -> None:
         with self.lock:
@@ -304,7 +304,7 @@ class AudioRouter:
                     None,
                 )
                 if virtual is None:
-                    raise RuntimeError("The TailDesk virtual speaker is not installed yet.")
+                    raise RuntimeError("The remote audio output device is not installed yet.")
                 loopback = next(
                     (mic for mic in soundcard.all_microphones(include_loopback=True)
                      if getattr(mic, "isloopback", False)
@@ -312,7 +312,7 @@ class AudioRouter:
                     None,
                 )
                 if loopback is None:
-                    raise RuntimeError("Windows did not expose loopback capture for the TailDesk virtual speaker.")
+                    raise RuntimeError("Windows did not expose loopback capture for the remote audio output device.")
                 saved = self._read_saved_route()
                 if saved and saved.get("phase") == "pending":
                     before_install = {int(key): str(value) for key, value in saved.get("defaults", {}).items()}

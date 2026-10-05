@@ -1,4 +1,4 @@
-name: Publish TailDesk release
+name: Verify and publish TailDesk
 
 on:
   push:
@@ -11,37 +11,107 @@ permissions:
 jobs:
   publish:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - name: Check out the pushed source
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - name: Build the self-contained Windows application and setup program
+      - name: Set up Node.js for browser JavaScript syntax verification
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Scrub personal email addresses from reachable Git history
+        id: history
+        shell: pwsh
+        env:
+          SAFE_GIT_EMAIL: ${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -m pip install git-filter-repo==2.47.0
+          python -m git_filter_repo --force --email-callback "return b'$env:SAFE_GIT_EMAIL'"
+          if ($LASTEXITCODE -ne 0) { throw "Could not sanitize historical commit identities." }
+          $emails = @(git log --all --format="%ae%n%ce" | Sort-Object -Unique)
+          $unsafeEmails = @($emails | Where-Object { $_ -ne $env:SAFE_GIT_EMAIL })
+          if ($emails.Count -eq 0 -or $unsafeEmails.Count -gt 0) {
+            throw "A non-private commit email remains in reachable history."
+          }
+          git remote add origin "https://github.com/$env:GITHUB_REPOSITORY.git"
+          if ($LASTEXITCODE -ne 0) { throw "Could not restore the GitHub remote after the history rewrite." }
+          git push "--force-with-lease=refs/heads/main:$env:GITHUB_SHA" origin HEAD:refs/heads/main
+          if ($LASTEXITCODE -ne 0) { throw "Main changed during cleanup or the sanitized history push was rejected." }
+          git push --force --tags origin
+          if ($LASTEXITCODE -ne 0) { throw "Could not update the release tags to sanitized commits." }
+          $cleanHead = (git rev-parse HEAD).Trim()
+          "clean_head=$cleanHead" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Install and verify application dependencies
         shell: pwsh
         run: |
-          $version = "0.1.$env:GITHUB_RUN_NUMBER"
-          @"
-          """TailDesk host implementation."""
-
-          __version__ = "$version"
-          "@ | Set-Content -Path .\taildesk\__init__.py -Encoding utf8
           python -m pip install --upgrade pip
           python -m pip install -r .\requirements.txt pyinstaller
-          python -m PyInstaller --noconfirm --clean --onedir --windowed --name TailDesk --distpath .\dist\host --workpath .\build\host --collect-all soundcard --collect-all pycaw --collect-all comtypes --collect-all pystray --add-data ".\taildesk\web;taildesk\web" .\remote_desktop_connection.py
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name TailDesk-Setup --distpath .\dist\installer --workpath .\build\installer --add-data ".\dist\host\TailDesk;payload\TailDesk" .\installer.py
-          Copy-Item .\dist\installer\TailDesk-Setup.exe ".\dist\TailDesk-Setup-$version.exe"
+          python -m pip install pip-audit
+          python -m pip_audit -r .\requirements.txt
+          python -m compileall -q .\taildesk .\remote_desktop_connection.py .\installer.py .\tests
+          python -m unittest discover -s .\tests -v
+          node --check .\taildesk\web\app.js
+          node --check .\taildesk\web\screen_protocol.js
+          node --check .\taildesk\web\adaptive_stream.js
+          node --check .\taildesk\web\input_queue.js
+          node --test .\tests\adaptive_stream.test.cjs .\tests\input_queue.test.cjs .\tests\screen_protocol.test.cjs
 
-      - name: Package source and publish a versioned release
+      - name: Read version and reject duplicate releases
+        id: version
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $version = "0.1.$env:GITHUB_RUN_NUMBER"
-          New-Item -ItemType Directory -Path .\dist -Force | Out-Null
+          $source = Get-Content .\taildesk\__init__.py -Raw
+          $match = [regex]::Match($source, '__version__\s*=\s*"(\d+\.\d+\.\d+)"')
+          if (-not $match.Success) { throw "taildesk.__version__ must be a semantic version such as 1.0.0." }
+          $version = $match.Groups[1].Value
+          gh release view "v$version" --repo "$env:GITHUB_REPOSITORY" 2>$null
+          if ($LASTEXITCODE -eq 0) { throw "Release v$version already exists. Bump taildesk.__version__ before publishing." }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Build the self-contained Windows application and setup program
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --name TailDesk --distpath .\dist\host --workpath .\build\host --collect-all soundcard --collect-all pycaw --collect-all comtypes --collect-all pystray --add-data ".\taildesk\web;taildesk\web" .\remote_desktop_connection.py
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name TailDesk-Setup --distpath .\dist\installer --workpath .\build\installer --add-data ".\dist\host\TailDesk;payload\TailDesk" .\installer.py
+          Copy-Item .\dist\installer\TailDesk-Setup.exe ".\dist\TailDesk-Setup-$version.exe"
+
+      - name: Package the source and publish a versioned GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
           $archive = ".\dist\TailDesk-$version.zip"
-          Compress-Archive -Path .\remote_desktop_connection.py, .\installer.py, .\taildesk, .\requirements.txt, .\README.md, .\UPDATE_PIPELINE.md, .\AGENTS.md, .\THIRD_PARTY_NOTICES.md -DestinationPath $archive -Force
-          gh release create "v$version" $archive ".\dist\TailDesk-Setup-$version.exe" --target $env:GITHUB_SHA --title "TailDesk $version" --generate-notes
+          $cleanHead = "${{ steps.history.outputs.clean_head }}"
+          git archive --format=zip --prefix="TailDesk-$version/" --output=$archive $cleanHead remote_desktop_connection.py installer.py taildesk tests requirements.txt README.md CHANGELOG.md UPDATE_PIPELINE.md AGENTS.md THIRD_PARTY_NOTICES.md
+          if ($LASTEXITCODE -ne 0) { throw "Could not package the tracked source tree." }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $archive))
+          try {
+            $forbidden = $zip.Entries | Where-Object { $_.FullName -match '(^|/)(settings\.json|github-token\.dpapi|audio-routing\.json|\.env|__pycache__)(/|$)|\.(pem|pfx|p12|pyc|pyo)$' }
+            if ($forbidden) { throw "Source archive contains generated or sensitive files." }
+            foreach ($entry in $zip.Entries) {
+              if ($entry.Length -eq 0 -or $entry.Length -gt 5000000) { continue }
+              if ($entry.FullName -notmatch '\.(py|js|html|css|json|ya?ml|toml|md|txt|ini|cfg)$') { continue }
+              $reader = [IO.StreamReader]::new($entry.Open())
+              try { $contents = $reader.ReadToEnd() } finally { $reader.Dispose() }
+              if ($contents -match '(?i)(gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|tskey-[A-Za-z0-9-]{12,}|[a-z0-9-]+\.ts\.net|[A-Z]:\\Users\\[^\\\s"'']+)') {
+                throw "Source archive scan found a credential, personal Tailnet endpoint, or local user path in $($entry.FullName)."
+              }
+            }
+          } finally { $zip.Dispose() }
+          gh release create "v$version" $archive ".\dist\TailDesk-Setup-$version.exe" --repo "$env:GITHUB_REPOSITORY" --target $cleanHead --title "TailDesk $version" --generate-notes

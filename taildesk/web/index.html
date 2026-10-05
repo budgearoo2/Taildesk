@@ -13,8 +13,6 @@
     <span class="spacer"></span>
     <button id="fullscreen">Fullscreen</button>
     <button id="audio-toggle" class="quiet">Install VB-CABLE</button>
-    <span id="audio-status" class="audio-status" role="status" aria-live="polite"></span>
-    <a class="audio-vendor" href="https://vb-audio.com/Cable/" target="_blank" rel="noopener">VB-Audio donationware</a>
     <button id="clipboard" aria-controls="clipboard-fallback" aria-expanded="false">Clipboard</button>
     <button id="files-toggle">Files</button>
     <button id="settings-toggle">Settings</button>
@@ -62,9 +60,13 @@
       <p class="hint">“auto” binds to the Tailnet IPv4 address. “127.0.0.1” allows this PC only. A specific IPv4 address can bind to one local interface.</p>
       <div class="columns">
         <div><label for="port">Port</label><input id="port" type="number" min="1024" max="65535"></div>
-        <div><label for="fps">Max frame rate</label><input id="fps" type="number" min="1" max="20"></div>
+        <div><label for="fps">Max frame rate (1-60)</label><input id="fps" type="number" min="1" max="60"></div>
         <div><label for="quality">JPEG quality</label><input id="quality" type="number" min="25" max="90"></div>
       </div>
+      <p class="hint">TailDesk adapts frame rate and JPEG quality to the measured response time. The selected frame rate is an upper limit; 60 FPS requires a fast host and connection.</p>
+      <h3>Remote audio</h3>
+      <p id="audio-status" class="audio-status" role="status" aria-live="polite"></p>
+      <p class="hint">VB-CABLE is donationware from <a href="https://vb-audio.com/Cable/" target="_blank" rel="noopener">VB-Audio</a>.</p>
       <label for="transfer-folder">Transfer folder</label>
       <input id="transfer-folder" autocomplete="off">
       <label class="check"><input id="clipboard-enabled" type="checkbox"> Enable clipboard sync</label>
@@ -76,6 +78,9 @@
     </div>
   </section>
   <div id="toast" role="status" aria-live="polite"></div>
+  <script src="{{ url_for('static', filename='adaptive_stream.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='input_queue.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='screen_protocol.js') }}" defer></script>
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </body>
 </html>
