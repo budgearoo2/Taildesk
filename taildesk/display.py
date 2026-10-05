@@ -89,6 +89,11 @@ class DisplayController:
                 return False
             if self._original is None:
                 self._original = DEVMODEW.from_buffer_copy(current)
+            # Heartbeats repeat the current browser size. Reapplying an
+            # unchanged display mode needlessly disturbs Windows shell hover
+            # tracking and can dismiss taskbar flyouts and tooltips.
+            if current.width == width and current.height == height:
+                return True
             target = DEVMODEW.from_buffer_copy(current)
             target.width, target.height = width, height
             target.fields = 0x00080000 | 0x00100000  # DM_PELSWIDTH | DM_PELSHEIGHT

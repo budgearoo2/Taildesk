@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.1
+
+- Avoid reapplying the host display mode on every browser heartbeat when the requested resolution is already active. This prevents needless Windows display resets that can dismiss taskbar flyouts and hover UI; native display restoration on disconnect is unchanged.
+- Add display-controller regression tests for repeated heartbeat sizes and native-resolution sessions.
+
 ## 1.0.0
 
 - Raise the configurable maximum frame rate from 20 to 60 FPS and use 60 FPS as the default cap for new installations.
