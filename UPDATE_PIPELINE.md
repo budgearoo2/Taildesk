@@ -12,6 +12,6 @@ For every follow-up fix, feature, or additional idea:
 
 Do not install a working copy on the host before the matching GitHub Release exists. Do not call an iteration complete until its repository changes and release are published. Preserve configuration and transfer files during updates.
 
-## Current deployment blocker
+## Initial release status
 
-The GitHub connection is available, but no repository is currently listed for the connected account and the available GitHub actions in this session do not create a new repository. Once a private repository is created and its owner/name is known, upload this project to its `main` branch; the included workflow will create the first release.
+The private repository is `budgearoo2/Taildesk`. The initial project has been uploaded to `main`, including `.github/workflows/release.yml`. Confirm that GitHub Actions ran successfully and that a versioned release is visible before installing TailDesk on the host PC. If a push does not start a workflow, check the repository's Actions settings and enable GitHub Actions.
