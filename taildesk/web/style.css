@@ -7,3 +7,5 @@
 .stats-overlay{position:absolute;z-index:2;top:12px;left:12px;min-width:245px;padding:10px 12px;border:1px solid #718198;border-radius:8px;background:#101923eF;color:#eaf1fa;font:12px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;box-shadow:0 8px 28px #0008;pointer-events:none}
 .stats-overlay strong{display:block;margin-bottom:3px;color:#9dd3ff;font:600 12px system-ui,sans-serif}
 .stats-overlay small{display:block;margin-top:3px;color:#aeb9c7;font:10px/1.4 system-ui,sans-serif}
+
+#realtime-video{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;pointer-events:none}#desktop.realtime-surface{opacity:0;position:relative}

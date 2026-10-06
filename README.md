@@ -2,13 +2,21 @@
 
 TailDesk is an early Windows 11 Home remote-control host. It serves an authenticated browser desktop on the PC's Tailnet IPv4 address, so a second Windows, macOS, Linux, or mobile device can connect through a browser while Tailscale is connected.
 
+## Realtime video and sound (1.0.4)
+
+Refresh the remote browser after updating. Realtime mode starts automatically; click **Enable remote sound** once to allow browser playback. Play YouTube or other media on the host and watch/listen in the remote browser. VB-CABLE must be installed for sound; apps pinned to another audio output may need Windows Volume Mixer set to CABLE Input.
+
+Steady 30 FPS with better picture quality is the default target. Settings supports up to 60 FPS, but 30 FPS leaves more encoding time and bandwidth per frame. Existing saved frame-rate settings are preserved when upgrading. Stats reports received/decoded FPS and network RTT. Capture and audio queues are bounded, H.264 disables B-frames and lookahead, and the sender adapts bitrate to receiver feedback. Frame pacing skips missed deadlines instead of accumulating old frames. Audio uses 48 kHz stereo in 20 ms chunks, sent as Opus. NVIDIA encoding uses the P5 quality preset with spatial adaptive quantization and variable bitrate, while keeping lookahead and B-frames disabled for responsive control.
+
+Signaling retains the existing password and controller ownership checks. WebRTC uses encrypted media/data sockets bound only to Tailnet IPv4 addresses, with no public STUN or TURN service. Windows Firewall must allow UDP for TailDesk from the Tailnet for realtime mode. If media cannot connect, the browser falls back to HTTP/JPEG compatibility mode. Existing TCP-only firewall rules permit fallback but do not enable realtime media.
+
 ## Current features
 
 - Live host screen in a browser, keyboard and mouse forwarding, and a responsive host display mode. Pointer positions are mapped across the visible desktop and the host process uses per-monitor DPI awareness to keep pointer input aligned with captured pixels. Mouse buttons stay held through pointer movement so click-and-drag text selection works; redundant display-mode resets are skipped on heartbeats so Windows hover state and taskbar flyouts can remain open; held keys send browser repeat events.
 - The remote masthead shows the host app version. **Stats** toggles a live overlay with image payload bitrate, updated-frame rate, poll rate, request time, host resolution, browser viewport, and adaptive stream settings.
 - The **Screen** dropdown beside **Fullscreen** lists all detected monitors and their resolutions. Capture and pointer coordinates follow the selection, including screens left of or above the primary monitor. Switching releases held keys/buttons, restores the previous monitor's resolution, and requests a fresh frame. The list refreshes on heartbeats; removing the selected display falls back to an available screen.
 - The laptop cursor follows the host's standard Windows cursor shape: text caret, link hand, resize arrows, busy, and hidden cursors. Cursor metadata rides on existing input/frame responses, including unchanged frames. The visible pointer is rendered locally; custom application cursor artwork currently falls back to the default arrow.
-- Screen updates use changed 128-pixel tiles when possible. Delta frames use a compact binary envelope to avoid JSON/base64 overhead. The browser adapts polling rate and JPEG quality to measured end-to-end capture, transfer, and decode time; the default 60 FPS setting is an upper limit and actual performance depends on the host and connection.
+- Compatibility mode screen updates use changed 128-pixel tiles when possible. Delta frames use a compact binary envelope to avoid JSON/base64 overhead. The browser adapts polling rate and JPEG quality to measured end-to-end capture, transfer, and decode time; the default 30 FPS setting is an upper limit and actual performance depends on the host and connection.
 - The original display mode is saved before the first resolution change and restored on explicit disconnect, a 12-second lost-client timeout, sign-out, or app shutdown.
 - Pointer events are sent without an extra fixed timer, and only adjacent unsent motion is coalesced so drag/key transitions stay ordered. Fast JPEG encoding trades a modest payload increase for less CPU delay; independent changed tiles decode concurrently with a limit of eight. Image comparison and compression do not hold the input/controller lock.
 - Clipboard text sync in both directions, including Command+C/Command+V from a Mac browser. Browsers permit automatic clipboard access on HTTPS; Safari may still require a user gesture. The direct Tailnet HTTP address uses a manual copy/paste panel opened on demand from the masthead Clipboard button, so host clipboard updates do not cover the remote desktop.
@@ -29,7 +37,7 @@ TailDesk is an early Windows 11 Home remote-control host. It serves an authentic
 
 ## Run from source for development
 
-Install 64-bit Python 3.11 or later, then open PowerShell in this folder and install dependencies:
+Install 64-bit Python 3.13 or later, then open PowerShell in this folder and install dependencies:
 
    ```powershell
    python -m pip install -r requirements.txt
@@ -65,11 +73,11 @@ Remove-NetFirewallRule -DisplayName "TailDesk (Tailnet only)"
 
 ## Known limitations
 
-- This release still uses HTTP JPEG polling, not a hardware-encoded video stream. The 60 FPS cap and latency optimizations do not guarantee game-streaming latency. Relative mouse/pointer lock, gamepad forwarding, and custom game cursor artwork are not implemented. Stats measures frame request/transfer/decode time, not full input-to-display latency.
+- Realtime mode uses DXGI capture, NVIDIA H.264 when supported (CPU H.264 otherwise), WebRTC video/audio, and a reliable ordered input channel. The default cap is 30 FPS; Settings supports up to 60 FPS. Actual unique motion is limited by the host display/content refresh rate and client hardware. Relative mouse/pointer lock, gamepad forwarding, and custom game cursor artwork are not implemented. Network RTT and decoder time in Stats are not full input-to-display latency.
 - Requires an interactive signed-in Windows session. UAC secure desktop, Windows sign-in screen, and other isolated desktops are not captured or controlled.
 - Display drivers can reject browser viewport resolutions. In that case the app keeps the last accepted mode and still restores the saved original mode on disconnect.
 - Clipboard browser APIs require a secure browser context for unattended synchronization. Over direct `http://100.x.x.x:8765`, use the visible manual clipboard controls.
-- TailDesk begins at a moderate rate and raises it while frames complete quickly; if processing or transfer exceeds the frame budget, it lowers the rate and JPEG quality. Static screens send no image payload when unchanged. Fast moving content still requires frequent host capture and comparison, so 60 FPS is not guaranteed on every PC or Tailnet connection.
+- In JPEG compatibility mode, TailDesk begins at a moderate rate and raises it while frames complete quickly; if processing or transfer exceeds the frame budget, it lowers the rate and JPEG quality. Static screens send no image payload when unchanged. Fast moving content still requires frequent host capture and comparison, so 60 FPS is not guaranteed on every PC or Tailnet connection.
 - Remote audio requires the signed VB-CABLE driver to be installed on the host. Click **Enable remote sound** after installation; Mac browsers require that user gesture before playing audio.
 - Windows applications explicitly pinned to a physical output device in Volume Mixer may continue playing there while connected. Set those applications to the virtual speaker if they do not follow the system default.
 - Automatic release checks use a fine-grained, repository-only, read-only GitHub token configured from the local tray. Without one, TailDesk runs normally but skips update checks.

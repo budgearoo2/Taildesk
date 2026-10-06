@@ -38,16 +38,17 @@
         <p class="hint">If your laptop cannot connect, make sure Tailscale is connected on both devices and Windows Firewall allows TailDesk's port from your Tailnet.</p>
       </div>
     </section>
+    <video id="realtime-video" class="hidden" autoplay muted playsinline></video>
     <canvas id="desktop" aria-label="Remote Windows desktop" tabindex="0"></canvas>
     <aside id="stats-overlay" class="stats-overlay hidden" aria-label="Stats for nerds" aria-live="off">
       <strong>Stats for nerds</strong>
       <div>Image data: <span id="stats-bitrate">—</span></div>
       <div>Updated frames: <span id="stats-fps">—</span></div>
-      <div>Frame time: <span id="stats-latency">—</span></div>
+      <div>Timing: <span id="stats-latency">—</span></div>
       <div>Host resolution: <span id="stats-resolution">—</span></div>
       <div>Browser viewport: <span id="stats-viewport">—</span></div>
       <div>Stream: <span id="stats-stream">—</span></div>
-      <small>Payload estimate; excludes HTTP and Tailnet overhead.</small>
+      <small>Network RTT is not total input-to-display latency.</small>
     </aside>
     <section id="clipboard-fallback" class="clipboard-fallback hidden">
       <div class="clipboard-heading">
@@ -92,7 +93,7 @@
         <div><label for="fps">Max frame rate (1-60)</label><input id="fps" type="number" min="1" max="60"></div>
         <div><label for="quality">JPEG quality</label><input id="quality" type="number" min="25" max="90"></div>
       </div>
-      <p class="hint">TailDesk adapts frame rate and JPEG quality to the measured response time. The selected frame rate is an upper limit; 60 FPS requires a fast host and connection.</p>
+      <p class="hint">30 FPS is recommended for consistent video and better picture quality. Hardware H.264 is used when available. JPEG quality applies to compatibility mode.</p>
       <h3>Remote audio</h3>
       <p id="audio-status" class="audio-status" role="status" aria-live="polite"></p>
       <p class="hint">VB-CABLE is donationware from <a href="https://vb-audio.com/Cable/" target="_blank" rel="noopener">VB-Audio</a>.</p>
@@ -112,6 +113,7 @@
   <script src="{{ url_for('static', filename='input_queue.js') }}" defer></script>
   <script src="{{ url_for('static', filename='screen_protocol.js') }}" defer></script>
   <script src="{{ url_for('static', filename='cursor_sync.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='realtime.js') }}" defer></script>
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </body>
 </html>

@@ -22,7 +22,7 @@ DRIVER_PACKAGE_DIR = APP_DIR / "vb-cable-pack45"
 AUDIO_STATE_FILE = APP_DIR / "audio-routing.json"
 AUDIO_RATE = 48_000
 AUDIO_CHANNELS = 2
-FRAMES_PER_CHUNK = 4_800
+FRAMES_PER_CHUNK = 960  # 20 ms at 48 kHz, matching an Opus packet.
 
 
 class AudioRouter:
@@ -30,7 +30,7 @@ class AudioRouter:
 
     def __init__(self, recover_interrupted_route: bool = True) -> None:
         self.lock = threading.RLock()
-        self.chunks: queue.Queue[bytes] = queue.Queue(maxsize=12)
+        self.chunks: queue.Queue[bytes] = queue.Queue(maxsize=3)
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.device_id: str | None = None
@@ -356,9 +356,11 @@ class AudioRouter:
 
     def _capture_loop(self, loopback) -> None:
         import numpy
+        import comtypes
 
+        comtypes.CoInitialize()
         try:
-            with loopback.recorder(samplerate=AUDIO_RATE) as recorder:
+            with loopback.recorder(samplerate=AUDIO_RATE, blocksize=FRAMES_PER_CHUNK) as recorder:
                 while not self.stop_event.is_set():
                     samples = recorder.record(numframes=FRAMES_PER_CHUNK)
                     if samples.ndim == 1:
@@ -381,6 +383,8 @@ class AudioRouter:
                 self.error = f"Remote audio capture stopped: {exc}"
                 self.thread = None
             threading.Thread(target=self.disconnect, daemon=True, name="taildesk-audio-restore").start()
+        finally:
+            comtypes.CoUninitialize()
 
     def next_chunk(self) -> bytes | None:
         try:

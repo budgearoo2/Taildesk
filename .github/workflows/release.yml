@@ -21,7 +21,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: Set up Node.js for browser JavaScript syntax verification
         uses: actions/setup-node@v4
@@ -94,7 +94,7 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.version }}"
-          python -m PyInstaller --noconfirm --clean --onedir --windowed --name TailDesk --distpath .\dist\host --workpath .\build\host --collect-all soundcard --collect-all pycaw --collect-all comtypes --collect-all pystray --add-data ".\taildesk\web;taildesk\web" .\remote_desktop_connection.py
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --name TailDesk --distpath .\dist\host --workpath .\build\host --collect-all soundcard --collect-all pycaw --collect-all comtypes --collect-all pystray --collect-all av --collect-all aiortc --collect-all pylibsrtp --collect-all dxcam --add-data ".\taildesk\web;taildesk\web" .\remote_desktop_connection.py
           if ($LASTEXITCODE -ne 0) { throw "Host packaging failed." }
           python -m PyInstaller --noconfirm --clean --onefile --windowed --name TailDesk-Setup --distpath .\dist\installer --workpath .\build\installer --add-data ".\dist\host\TailDesk;payload\TailDesk" .\installer.py
           if ($LASTEXITCODE -ne 0) { throw "Setup packaging failed." }

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.4
+
+- Add continuous WebRTC H.264 video, Opus audio, and ordered keyboard/mouse data, using Tailnet-only media sockets and authenticated controller signaling. Retain JPEG fallback and screen selection.
+- Use DXGI capture and NVIDIA hardware encoding when available, with GDI and low-delay CPU encoding fallbacks. Disable B-frames/lookahead, adapt bitrate, bound queues, and pace frames against deadlines. Target steady 30 FPS with the NVIDIA P5 quality preset, spatial adaptive quantization, and variable bitrate; retain a maximum 60 FPS setting.
+- Fix audio capture COM initialization on its worker thread. Reduce capture blocks from 100 ms to 20 ms and prevent stale sound accumulation.
+- Show actual browser decoded FPS, network RTT, and decode time. Preserve password, host self-view restrictions, input release, and display/audio restoration.
+
+
 ## 1.0.3
 
 - Add a screen selector beside Fullscreen for every detected monitor. Switch capture, input coordinates, and per-monitor display mode together; release held input and restore the previous monitor before switching, and recover if a monitor is unplugged.

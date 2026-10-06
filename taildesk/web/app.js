@@ -17,7 +17,7 @@
   let frameGeneration = 0;
   let currentFrame = Promise.resolve();
   const inputQueue = window.TailDeskInputQueue.create((kind, values) =>
-    api("/api/input", {
+    realtime.input(kind, { monitor: selectedMonitor, ...values }) ? Promise.resolve() : api("/api/input", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ kind, monitor: selectedMonitor, ...values }),
@@ -40,9 +40,45 @@
   let lastHostClipboard = null;
   let toastTimer;
   let latestStats = null;
+  let realtimeEnabled = false;
+  const mediaVideo = $("realtime-video");
+  const realtime = window.TailDeskRealtime.create({
+    video: mediaVideo, canvas: desktop, api, cursor: cursorSync,
+    onFallback: () => {
+      api("/api/realtime/stop", { method: "POST" }).catch(() => {});
+      if (active) {
+        forceFullFrame = true;
+        clearTimeout(frameTimer);
+        refreshFrame();
+        if (audioPlaying) pollAudio();
+        toast("Using compatibility stream; realtime connection was interrupted.");
+      }
+    },
+    onStats: metrics => {
+      $("stats-bitrate").textContent = window.TailDeskStreamStats.formatBitrate(metrics.bitrate);
+      $("stats-fps").textContent = `${metrics.fps.toFixed(1)} decoded fps`;
+      $("stats-latency").textContent = `${metrics.rtt.toFixed(1)} ms network RTT / ${metrics.decodeMs.toFixed(1)} ms decode`;
+      $("stats-resolution").textContent = `${metrics.width || desktop.width} x ${metrics.height || desktop.height}`;
+      const viewport = targetSize();
+      $("stats-viewport").textContent = `${viewport.width} x ${viewport.height}`;
+      $("stats-stream").textContent = `Realtime H.264 + Opus / ${fps} fps cap`;
+    },
+  });
+  async function startMedia() {
+    const generation = frameGeneration;
+    if (realtimeEnabled && active) {
+      const connected = await realtime.start();
+      if (generation !== frameGeneration) return;
+      if (!active) { realtime.stop(); return; }
+      if (connected) return;
+      await api("/api/realtime/stop", { method: "POST" }).catch(() => {});
+      toast("Realtime unavailable; using compatibility stream.");
+    }
+    if (active) refreshFrame();
+  }
 
   function renderStats(metrics = latestStats) {
-    if (!metrics) return;
+    if (!metrics || realtime.active) return;
     const viewport = targetSize();
     $("stats-bitrate").textContent = window.TailDeskStreamStats.formatBitrate(metrics.receiveBitsPerSecond);
     $("stats-fps").textContent = `${metrics.updatedFps.toFixed(1)} fps (${metrics.pollFps.toFixed(1)} polls/s)`;
@@ -80,6 +116,8 @@
   }
 
   function showLogin() {
+    realtime.stop();
+    mediaVideo.muted = true;
     frameGeneration += 1;
     $("monitor-select").disabled = true;
     cursorSync.reset();
@@ -126,6 +164,7 @@
       const state = await api("/api/state");
       if (state.version) $("version").textContent = `v${state.version}`;
       fps = state.settings.fps;
+      realtimeEnabled = !!state.realtime;
       configuredQuality = state.settings.jpeg_quality;
       if (state.host_browser) {
         hostMode = true;
@@ -162,8 +201,8 @@
       await heartbeat();
       const connectedState = await api("/api/state");
       updateAudioStatus(connectedState.audio);
-      refreshFrame();
       heartbeatTimer = setInterval(() => heartbeat().catch(() => {}), 2500);
+      startMedia();
       clipboardTimer = setInterval(readHostClipboard, 900);
     } catch (_) {
       showLogin();
@@ -198,11 +237,11 @@
   }
 
   async function pollAudio() {
-    if (!active || !audioPlaying || !audioContext) return;
+    if (!active || !audioPlaying || !audioContext || realtime.active) return;
     let nextDelay = 0;
     try {
       const response = await fetch(`/api/audio?t=${Date.now()}`, { cache: "no-store" });
-      if (response.status === 204) nextDelay = 60;
+      if (response.status === 204) nextDelay = 5;
       else if (!response.ok) nextDelay = 250;
       else {
         const bytes = new DataView(await response.arrayBuffer());
@@ -216,7 +255,7 @@
           right[index] = bytes.getInt16(index * 4 + 2, true) / 32768;
         }
         const now = audioContext.currentTime;
-        if (audioNextTime < now) audioNextTime = now + 0.04;
+        if (audioNextTime < now || audioNextTime > now + 0.1) audioNextTime = now + 0.02;
         const source = audioContext.createBufferSource();
         source.buffer = buffer;
         source.connect(audioContext.destination);
@@ -246,6 +285,7 @@
       return;
     }
     if (audioPlaying) {
+      mediaVideo.muted = true;
       audioPlaying = false;
       clearTimeout(audioPollTimer);
       await audioContext?.suspend();
@@ -254,8 +294,19 @@
     }
     try {
       const Context = window.AudioContext || window.webkitAudioContext;
+      if (Context) {
+        audioContext ||= new Context({ latencyHint: "interactive", sampleRate: 48000 });
+        await audioContext.resume();
+      }
+      mediaVideo.muted = false;
+      if (realtime.active) {
+        await mediaVideo.play();
+        audioPlaying = true;
+        $("audio-toggle").textContent = "Mute remote sound";
+        return;
+      }
       if (!Context) throw new Error("This browser does not support remote audio playback.");
-      audioContext ||= new Context();
+      audioContext ||= new Context({ latencyHint: "interactive", sampleRate: 48000 });
       await audioContext.resume();
       audioNextTime = audioContext.currentTime + 0.04;
       audioPlaying = true;
@@ -302,7 +353,7 @@
       if (wasSelected && active && !switchingMonitor) {
         frameGeneration += 1;
         clearTimeout(frameTimer);
-        currentFrame.finally(() => { if (active && !switchingMonitor) refreshFrame(); });
+        currentFrame.finally(() => { if (active && !switchingMonitor && !realtime.active) refreshFrame(); });
       }
     }
     const signature = JSON.stringify(monitors);
@@ -322,6 +373,7 @@
   $("monitor-select").addEventListener("change", async () => {
     if (!active || switchingMonitor) return;
     const requested = $("monitor-select").value;
+    realtime.stop();
     switchingMonitor = true;
     $("monitor-select").disabled = true;
     releaseKeys();
@@ -347,7 +399,7 @@
       cursorSync.reset();
       if (active) {
         await heartbeat().catch((error) => toast(error.message));
-        refreshFrame();
+        startMedia();
         heartbeatTimer = setInterval(() => heartbeat().catch(() => {}), 2500);
       }
     }
@@ -372,7 +424,7 @@
   });
 
   function refreshFrame() {
-    if (!active) return;
+    if (!active || realtime.active) return;
     const generation = frameGeneration;
     const monitorAtStart = selectedMonitor;
     const isCurrent = () => active && generation === frameGeneration && monitorAtStart === selectedMonitor;
@@ -690,6 +742,7 @@
       });
       fps = data.settings.fps;
       configuredQuality = data.settings.jpeg_quality;
+      if (active && realtimeEnabled) { frameGeneration += 1; realtime.stop(); clearTimeout(frameTimer); startMedia(); }
       adaptiveQuality = Math.min(adaptiveQuality, configuredQuality);
       $("settings").classList.add("hidden");
       if (hostMode) renderHostStatus(await api("/api/state"));
@@ -708,6 +761,7 @@
   window.addEventListener("pagehide", () => {
     if (active) navigator.sendBeacon("/api/disconnect", "");
     releaseKeys();
+    realtime.stop();
   });
 
   connect();

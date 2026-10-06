@@ -119,6 +119,17 @@ class SettingsApiTests(unittest.TestCase):
         self.assertEqual(rejected.status_code, 400)
         self.assertEqual(self.store.values["fps"], 60)
 
+    def test_realtime_requires_authentication_and_controller_ownership(self):
+        unauthenticated = self.app.test_client()
+        unauthenticated.environ_base["REMOTE_ADDR"] = "192.0.2.10"
+        self.assertEqual(unauthenticated.post("/api/realtime", json={}).status_code, 401)
+        client = self.remote_client()
+        self.assertEqual(client.post("/api/realtime", json={}).status_code, 409)
+        self.assertEqual(client.post("/api/realtime/stop").status_code, 409)
+        client.post("/api/heartbeat", json={"width": 1280, "height": 720})
+        self.assertEqual(client.post("/api/realtime", json={"sdp": [], "type": "offer"}).status_code, 400)
+        self.assertIsNone(self.app.config["TAILDESK_STATE"].realtime)
+
     def test_remote_settings_requests_still_require_login(self) -> None:
         client = self.app.test_client()
         response = client.get("/api/settings", environ_overrides={"REMOTE_ADDR": "192.0.2.10"})

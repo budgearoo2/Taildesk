@@ -27,7 +27,7 @@ class HostAccessTests(unittest.TestCase):
         state = client.get("/api/state").get_json()
         self.assertTrue(state["host_browser"])
         self.assertTrue(state["local_access"])
-        for path, method in (("heartbeat", "post"), ("input", "post"), ("screen", "get"), ("audio", "get"), ("clipboard", "get")):
+        for path, method in (("heartbeat", "post"), ("input", "post"), ("screen", "get"), ("audio", "get"), ("clipboard", "get"), ("realtime", "post"), ("realtime/stop", "post")):
             self.assertEqual(getattr(client, method)(f"/api/{path}").status_code, 403)
         self.assertFalse(self.app.config["TAILDESK_STATE"].connected)
         self.assertEqual(self.display.resolutions, [])

@@ -7,3 +7,6 @@ pycaw>=20260927,<20270101
 soundcard>=0.4.6,<1
 pystray>=0.19,<1
 waitress>=3,<4
+aiortc==1.14.0
+aioice==0.10.2
+dxcam==0.3.0

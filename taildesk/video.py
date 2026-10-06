@@ -17,7 +17,7 @@ MAX_JPEG_QUALITY = 90
 
 
 def validate_frame_rate(value: object) -> int:
-    """Parse an allowed frame-rate cap, rejecting values outside 1–60 FPS."""
+    """Parse an allowed whole-number frame-rate cap from 1 to 60 FPS."""
     if isinstance(value, bool) or (
         isinstance(value, numbers.Real) and not math.isfinite(value)
     ):

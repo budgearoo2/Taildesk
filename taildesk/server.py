@@ -71,6 +71,7 @@ class ConnectionState:
         self.frame_lock = threading.Lock()
         self.monitor_id: str | None = None
         self.monitor_revision = 0
+        self.realtime = None
         self._stop = threading.Event()
         threading.Thread(target=self._watchdog, daemon=True, name="taildesk-connection-watchdog").start()
 
@@ -118,6 +119,8 @@ class ConnectionState:
             self.connected = False
             self.last_seen = None
             self.owner = None
+            if self.realtime:
+                self.realtime.close()
         try:
             self.audio.disconnect()
         except Exception:
@@ -305,7 +308,7 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
     def require_auth():
         if host_browser() and request.path in {
             "/api/heartbeat", "/api/screen", "/api/input", "/api/audio", "/api/clipboard",
-            "/api/monitor",
+            "/api/monitor", "/api/realtime", "/api/realtime/stop",
         }:
             return jsonify(error="This is the host PC. Open the connection address on your laptop to control it."), 403
         if loopback_client():
@@ -319,7 +322,7 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
         if request.path in {"/", "/api/login"} or (
             request.endpoint == "static" and request.view_args.get("filename") in {
                 "style.css", "app.js", "screen_protocol.js", "adaptive_stream.js",
-                "input_queue.js", "stream_stats.js", "cursor_sync.js",
+                "input_queue.js", "stream_stats.js", "cursor_sync.js", "realtime.js",
             }
         ):
             return None
@@ -378,6 +381,7 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
             audio=state.audio.status(),
             monitors=list_monitors(),
             selected_monitor=state.monitor_id,
+            realtime=True,
         )
 
     @app.post("/api/heartbeat")
@@ -478,6 +482,38 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
         response.headers["Content-Type"] = "application/octet-stream"
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    @app.post("/api/realtime")
+    def realtime_offer():
+        owner = session.get("client_id")
+        with state.lock:
+            if not state.can_control(owner):
+                return jsonify(error="This browser does not own the active desktop session."), 409
+            data = request.get_json(silent=True) or {}
+            sdp = data.get("sdp")
+            if not isinstance(sdp, str) or len(sdp) > 64000 or data.get("type") != "offer":
+                return jsonify(error="Invalid media offer"), 400
+            if state.realtime is None:
+                from taildesk.realtime import RealtimeSession
+                state.realtime = RealtimeSession(state)
+        def realtime_input(data, monitor):
+            with app.test_request_context():
+                apply_input(data, monitor)
+        try:
+            answer = state.realtime.offer(owner, sdp, validate_frame_rate(store.snapshot().get("fps", 60)), realtime_input)
+            return jsonify(answer)
+        except Exception:
+            LOG.exception("Realtime negotiation failed")
+            return jsonify(error="Realtime video unavailable; using compatibility mode."), 503
+
+    @app.post("/api/realtime/stop")
+    def realtime_stop():
+        if not state.can_control(session.get("client_id")):
+            return jsonify(error="Desktop session ended"), 409
+        if state.realtime:
+            state.realtime.close()
+        state.release_inputs()
+        return jsonify(ok=True)
 
     @app.post("/api/audio/install")
     def audio_install():

@@ -17,7 +17,7 @@ from taildesk.video import (
 
 class FrameRateTests(unittest.TestCase):
     def test_accepts_supported_endpoints_and_middle_values(self) -> None:
-        for value in (1, 8, 20, 60, "60"):
+        for value in (1, 8, 20, 30, 60, "60"):
             with self.subTest(value=value):
                 self.assertEqual(validate_frame_rate(value), int(value))
 

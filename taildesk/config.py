@@ -15,7 +15,7 @@ DEFAULT_TRANSFER_DIR = Path.home() / "Downloads" / "TailDesk"
 DEFAULTS: dict[str, Any] = {
     "bind_host": "auto",
     "port": 8765,
-    "fps": 60,
+    "fps": 30,
     "jpeg_quality": 65,
     "clipboard_enabled": True,
     "transfer_folder": str(DEFAULT_TRANSFER_DIR),

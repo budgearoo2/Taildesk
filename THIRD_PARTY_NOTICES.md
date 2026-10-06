@@ -8,3 +8,6 @@ TailDesk can download the unmodified [VB-Audio VB-CABLE Driver Pack 45](https://
 - The setup executable and Windows 10 x64 hardware catalog were verified locally with Authenticode signatures from Vincent Burel and Microsoft Windows Hardware Compatibility Publisher.
 
 Windows administrator approval is required to run the vendor installer.
+
+
+Realtime streaming uses [aiortc](https://github.com/aiortc/aiortc) and [aioice](https://github.com/aiortc/aioice) (BSD), [DXcam](https://github.com/ra1nty/DXcam) (MIT), [PyAV](https://github.com/PyAV-Org/PyAV) (BSD), and their packaged dependencies. PyAV distributes dynamically linked [FFmpeg](https://ffmpeg.org/download.html) libraries and codecs; upstream build recipes and source references are at [PyAV's wheel builder](https://github.com/PyAV-Org/pyav-ffmpeg). Upstream package metadata and license files accompany the bundled runtime. NVIDIA hardware encoding uses the installed NVIDIA driver; CPU fallback uses the bundled libx264 encoder.

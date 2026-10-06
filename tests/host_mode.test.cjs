@@ -16,7 +16,7 @@ async function loadViewer({ host = true, authenticated = true } = {}) {
         value: "", textContent: "", style: {}, dataset: {}, events, width: 1280, height: 720,
         classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c), toggle(c, enabled) { if (enabled) classes.add(c); else classes.delete(c); } },
         addEventListener: (event, callback) => { events[event] = callback; },
-        getContext: () => ({}), setAttribute() {}, focus() {}, select() {},
+        pause() {}, getContext: () => ({}), setAttribute() {}, focus() {}, select() {},
         replaceChildren(...items) { this.children = items; },
       });
     }
@@ -48,7 +48,7 @@ async function loadViewer({ host = true, authenticated = true } = {}) {
   });
   Object.assign(context, window);
   context.window = context;
-  for (const filename of ["stream_stats.js", "input_queue.js", "adaptive_stream.js", "screen_protocol.js", "cursor_sync.js", "app.js"]) {
+  for (const filename of ["stream_stats.js", "input_queue.js", "adaptive_stream.js", "screen_protocol.js", "cursor_sync.js", "realtime.js", "app.js"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "../taildesk/web", filename), "utf8"), context, { filename });
   }
   await new Promise(setImmediate);
