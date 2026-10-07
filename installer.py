@@ -16,6 +16,17 @@ APP_NAME = "TailDesk"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 APPDATA_DIR = Path(os.environ.get("APPDATA", Path.home())) / APP_NAME
 DEFAULT_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Programs" / APP_NAME
+START_MENU_DIR = Path(os.environ.get("APPDATA", Path.home())) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+POWERSHELL = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+# Paths travel in environment variables so folder names are never parsed as script.
+SHORTCUT_SCRIPT = (
+    "$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($env:TAILDESK_SHORTCUT); "
+    "$shortcut.TargetPath = $env:TAILDESK_TARGET; "
+    "$shortcut.WorkingDirectory = $env:TAILDESK_DIR; "
+    "$shortcut.IconLocation = $env:TAILDESK_TARGET + ',0'; "
+    "$shortcut.Description = 'Start the TailDesk remote desktop host'; "
+    "$shortcut.Save()"
+)
 
 
 def payload_dir() -> Path:
@@ -33,6 +44,26 @@ def set_startup(install_dir: Path, enabled: bool) -> None:
                 winreg.DeleteValue(key, APP_NAME)
             except FileNotFoundError:
                 pass
+
+
+def create_start_menu_shortcut(install_dir: Path) -> bool:
+    """Add TailDesk to the Start menu so Windows search can find and relaunch it."""
+    try:
+        START_MENU_DIR.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            [str(POWERSHELL), "-NoProfile", "-NonInteractive", "-Command", SHORTCUT_SCRIPT],
+            env={
+                **os.environ,
+                "TAILDESK_SHORTCUT": str(START_MENU_DIR / f"{APP_NAME}.lnk"),
+                "TAILDESK_TARGET": str(install_dir / f"{APP_NAME}.exe"),
+                "TAILDESK_DIR": str(install_dir),
+            },
+            capture_output=True, timeout=60, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def wait_for_process_exit(process_id: int, timeout_seconds: int = 45) -> None:
@@ -56,7 +87,7 @@ def wait_for_process_exit(process_id: int, timeout_seconds: int = 45) -> None:
         kernel.CloseHandle(handle)
 
 
-def install(install_dir: Path, startup: bool | None, launch: bool, minimized: bool = False) -> None:
+def install(install_dir: Path, startup: bool | None, launch: bool, minimized: bool = False) -> bool:
     source = payload_dir()
     if not (source / f"{APP_NAME}.exe").is_file():
         raise FileNotFoundError("The bundled TailDesk application files are missing.")
@@ -85,6 +116,7 @@ def install(install_dir: Path, startup: bool | None, launch: bool, minimized: bo
         except (OSError, json.JSONDecodeError, AttributeError):
             startup = False
     set_startup(install_dir, startup)
+    shortcut_created = create_start_menu_shortcut(install_dir)
 
     if launch:
         flags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(
@@ -96,6 +128,7 @@ def install(install_dir: Path, startup: bool | None, launch: bool, minimized: bo
             creationflags=flags,
             close_fds=True,
         )
+    return shortcut_created
 
 
 def main() -> int:
@@ -150,11 +183,15 @@ def main() -> int:
         def do_install() -> None:
             target = Path(path_var.get()).expanduser()
             try:
-                install(target, startup_var.get(), launch_var.get())
+                shortcut_created = install(target, startup_var.get(), launch_var.get())
             except (OSError, ValueError, zipfile.BadZipFile) as exc:
                 messagebox.showerror(APP_NAME, f"Setup could not finish:\n{exc}", parent=root)
                 return
-            messagebox.showinfo(APP_NAME, "TailDesk is installed.", parent=root)
+            if shortcut_created:
+                message = "TailDesk is installed. Search for TailDesk in the Start menu to open it again."
+            else:
+                message = f"TailDesk is installed, but its Start menu shortcut could not be created. Start it from {target}."
+            messagebox.showinfo(APP_NAME, message, parent=root)
             root.destroy()
 
         ttk.Button(frame, text="Install", command=do_install).pack(anchor="e", pady=(14, 0))

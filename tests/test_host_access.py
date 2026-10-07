@@ -96,6 +96,18 @@ class HostAccessTests(unittest.TestCase):
         self.assertEqual(state["remote_url"], "http://192.0.2.20:8765/")
         self.assertTrue(state["restart_required"])
 
+    def test_health_check_reports_bind_only_to_the_local_supervisor(self):
+        self.app.config["TAILDESK_BIND"] = "192.0.2.20"
+        local = self.app.test_client().get("/api/health")
+        self.assertEqual(local.get_json(), {"ok": True, "bind": "192.0.2.20"})
+        for headers, address in (({"Host": "remote.example"}, "192.0.2.10"), ({}, "192.0.2.20")):
+            client = self.app.test_client()
+            client.environ_base["REMOTE_ADDR"] = address
+            response = client.get("/api/health", headers=headers)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get_json(), {"ok": True, "bind": None})
+            self.assertEqual(client.get("/api/settings", headers=headers).status_code, 401)
+
 
 if __name__ == "__main__":
     unittest.main()

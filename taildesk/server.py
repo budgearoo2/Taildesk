@@ -319,7 +319,7 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
             return None
         # All viewer dependencies must load before the remote browser signs in.
         # Templates and other files in the web folder are not public assets.
-        if request.path in {"/", "/api/login"} or (
+        if request.path in {"/", "/api/login", "/api/health"} or (
             request.endpoint == "static" and request.view_args.get("filename") in {
                 "style.css", "app.js", "screen_protocol.js", "adaptive_stream.js",
                 "input_queue.js", "stream_stats.js", "cursor_sync.js", "realtime.js",
@@ -329,6 +329,12 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
         if not session.get("authenticated"):
             return jsonify(error="Sign in"), 401
         return None
+
+    @app.get("/api/health")
+    def health():
+        # The supervisor polls this to detect a hung host. It must stay cheap and
+        # never wait on controller locks; only the local supervisor learns the bind.
+        return jsonify(ok=True, bind=app.config.get("TAILDESK_BIND") if loopback_client() else None)
 
     @app.get("/")
     def index():

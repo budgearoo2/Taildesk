@@ -94,9 +94,9 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.version }}"
-          python -m PyInstaller --noconfirm --clean --onedir --windowed --name TailDesk --distpath .\dist\host --workpath .\build\host --collect-all soundcard --collect-all pycaw --collect-all comtypes --collect-all pystray --collect-all av --collect-all aiortc --collect-all pylibsrtp --collect-all dxcam --add-data ".\taildesk\web;taildesk\web" .\remote_desktop_connection.py
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --icon .\assets\taildesk.ico --name TailDesk --distpath .\dist\host --workpath .\build\host --collect-all soundcard --collect-all pycaw --collect-all comtypes --collect-all pystray --collect-all av --collect-all aiortc --collect-all pylibsrtp --collect-all dxcam --add-data ".\taildesk\web;taildesk\web" .\remote_desktop_connection.py
           if ($LASTEXITCODE -ne 0) { throw "Host packaging failed." }
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name TailDesk-Setup --distpath .\dist\installer --workpath .\build\installer --add-data ".\dist\host\TailDesk;payload\TailDesk" .\installer.py
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --icon .\assets\taildesk.ico --name TailDesk-Setup --distpath .\dist\installer --workpath .\build\installer --add-data ".\dist\host\TailDesk;payload\TailDesk" .\installer.py
           if ($LASTEXITCODE -ne 0) { throw "Setup packaging failed." }
           Copy-Item .\dist\installer\TailDesk-Setup.exe ".\dist\TailDesk-Setup-$version.exe"
 
@@ -108,7 +108,7 @@ jobs:
           $version = "${{ steps.version.outputs.version }}"
           $archive = ".\dist\TailDesk-$version.zip"
           $cleanHead = "${{ steps.history.outputs.clean_head }}"
-          git archive --format=zip --prefix="TailDesk-$version/" --output=$archive $cleanHead remote_desktop_connection.py installer.py taildesk tests requirements.txt README.md CHANGELOG.md UPDATE_PIPELINE.md AGENTS.md THIRD_PARTY_NOTICES.md
+          git archive --format=zip --prefix="TailDesk-$version/" --output=$archive $cleanHead remote_desktop_connection.py installer.py taildesk assets tests requirements.txt README.md CHANGELOG.md UPDATE_PIPELINE.md AGENTS.md THIRD_PARTY_NOTICES.md
           if ($LASTEXITCODE -ne 0) { throw "Could not package the tracked source tree." }
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $zip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $archive))

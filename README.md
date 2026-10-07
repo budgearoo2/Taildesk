@@ -27,11 +27,13 @@ Signaling retains the existing password and controller ownership checks. WebRTC 
 - Settings page can change port, bind address, maximum frame rate, image quality, clipboard, transfer folder, and Windows sign-in startup behavior.
 - A 14-character minimum admin password is required on first launch for Tailnet connections. Only a salted PBKDF2 hash is stored in the app settings.
 - The Windows setup executable includes TailDesk and its Python runtime/packages. Its startup checkbox controls whether TailDesk runs when that Windows user signs in.
+- A small supervisor process keeps the host running. If the host process crashes, or stops answering its local health check for about a minute after it has started listening, the supervisor ends it, resets every display to its saved Windows mode, releases any keys or mouse buttons still held, and starts it again minimized. Audio output is restored by the restarted host from its saved routing snapshot. Restarts back off from 2 seconds to 1 minute when crashes repeat quickly. Choosing **Quit TailDesk** in the tray stops both processes.
+- Setup adds TailDesk to the Start menu, so searching Windows for **TailDesk** starts it again. Launching it while it is already running opens the host settings page instead of starting a second copy.
 - Packaged installations check the latest stable GitHub release at each start after a repository read-only token is configured from the tray. A newer setup program is installed only after its SHA-256 matches the release metadata.
 
 ## Install the packaged application
 
-1. Download and run `TailDesk-Setup-<version>.exe` from the [latest GitHub release](https://github.com/budgearoo2/Taildesk/releases/latest). It installs TailDesk with its runtime and dependencies, so Python does not need to be installed separately. Choose whether it should start when you sign in to Windows.
+1. Download and run `TailDesk-Setup-<version>.exe` from the [latest GitHub release](https://github.com/budgearoo2/Taildesk/releases/latest). It installs TailDesk with its runtime and dependencies, so Python does not need to be installed separately. Choose whether it should start when you sign in to Windows. Setup also adds a **TailDesk** Start menu shortcut, so you can find it in Windows search.
 2. On first launch, create the TailDesk admin password.
 3. To enable automatic updates, open the local tray menu and choose **Configure GitHub updates**. Create a fine-grained personal access token restricted to `budgearoo2/Taildesk` with **Contents: Read-only** access. TailDesk verifies it against GitHub, then encrypts it with Windows DPAPI for the current Windows account. You can revoke the token or remove it from the tray menu later.
 
@@ -71,6 +73,15 @@ Only create this rule when you need it. If you change the app port, update the f
 Remove-NetFirewallRule -DisplayName "TailDesk (Tailnet only)"
 ```
 
+### Reaching other web apps on the host
+
+Tailscale does not limit how many ports one device can use on another, so a laptop can use TailDesk and any other host web app at the same time. If another app on the host does not load at `http://<host-tailnet-ipv4>:<port>/`, the usual causes are:
+
+- The app listens only on `127.0.0.1`/`localhost`. Start it bound to the host's Tailnet IPv4 address (check its host or bind option), or publish it privately to the Tailnet with `tailscale serve --bg --tcp=<port> tcp://127.0.0.1:<port>`.
+- Windows Firewall blocks the port. The first-run firewall prompt appears on the host screen; if it was dismissed, add a Tailnet-only rule like the TailDesk one above with that app's port.
+
+Do not use router port forwarding or Tailscale Funnel for these apps either.
+
 ## Known limitations
 
 - Realtime mode uses DXGI capture, NVIDIA H.264 when supported (CPU H.264 otherwise), WebRTC video/audio, and a reliable ordered input channel. The default cap is 30 FPS; Settings supports up to 60 FPS. Actual unique motion is limited by the host display/content refresh rate and client hardware. Relative mouse/pointer lock, gamepad forwarding, and custom game cursor artwork are not implemented. Network RTT and decoder time in Stats are not full input-to-display latency.
@@ -92,7 +103,7 @@ Host file transfer directory: `%USERPROFILE%\Downloads\TailDesk` by default.
 
 The tray icon opens `http://127.0.0.1:<port>/`; direct requests from that local page skip the password screen and show host settings, without a remote-control session. Open the displayed connection URL on the laptop, not the host. Remote Tailnet browser settings remain protected by the admin password. A newly opened remote browser can load all viewer scripts before signing in, while control and settings APIs remain authenticated.
 
-Startup and connection diagnostics are saved in `%APPDATA%\TailDesk\taildesk.log` (rotated at 1 MB with two backups). If the local port is already occupied, startup reports the error in a dialog rather than failing silently. Optional Tailscale HTTPS setup runs in the background so it cannot delay the tray or direct connection.
+Startup and connection diagnostics are saved in `%APPDATA%\TailDesk\taildesk.log` (rotated at 1 MB with two backups). Supervisor restarts, with the host process's exit code (for example `0xC0000005` for a native access violation), are logged in `%APPDATA%\TailDesk\taildesk-supervisor.log`. Python tracebacks from native crashes are appended to `%APPDATA%\TailDesk\taildesk-crash.log`, so a crash leaves evidence even when it bypasses normal logging. If the local port is already occupied, startup reports the error in a dialog rather than failing silently. Optional Tailscale HTTPS setup runs in the background so it cannot delay the tray or direct connection.
 
 ## Development
 

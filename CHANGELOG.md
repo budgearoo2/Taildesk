@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.5
+
+- Run the host under a lightweight supervisor that restarts it after a crash, or once it has been serving and then goes about a minute without answering its loopback health check (or its Tailnet listener stops). Before restarting, reset displays to their saved Windows modes and release held keys and mouse buttons; the restarted host restores audio from its saved routing snapshot. Restarts back off when crashes repeat. Tray **Quit** still exits completely.
+- Record each host exit code in `taildesk-supervisor.log` and native-crash tracebacks in `taildesk-crash.log`.
+- Allow only one TailDesk host per Windows user; launching it again opens the local settings page.
+- Add a TailDesk Start menu shortcut during setup and updates so Windows search can start it, and give the app and setup a TailDesk icon.
+- Run the startup update check in the supervisor so setup waits for the process that holds the installed files.
+- Document how to reach other host web apps over the Tailnet alongside TailDesk.
+
 ## 1.0.4
 
 - Add continuous WebRTC H.264 video, Opus audio, and ordered keyboard/mouse data, using Tailnet-only media sockets and authenticated controller signaling. Retain JPEG fallback and screen selection.

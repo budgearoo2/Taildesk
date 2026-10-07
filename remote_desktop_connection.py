@@ -3,23 +3,18 @@
 from __future__ import annotations
 
 import atexit
+import faulthandler
 import logging
 from logging.handlers import RotatingFileHandler
 import os
 import sys
 import threading
+import time
 import webbrowser
-from pathlib import Path
 from tkinter import Tk, messagebox, simpledialog
 
 from taildesk.config import APP_DIR, ConfigStore
-from taildesk.display import DisplayController
-from taildesk.server import create_app, find_tailscale_ipv4
-from taildesk.startup import set_startup
-from taildesk.network import HostListeners
-from taildesk.tray import create_tray
-from taildesk.tailscale_serve import configure_https
-from taildesk.updater import check_startup_update, configure_updates
+from taildesk.supervisor import EXIT_NO_PASSWORD, RESTARTED_FLAG, WORKER_FLAG, Supervisor, acquire_single_instance
 
 APP_NAME = "TailDesk"
 LOG = logging.getLogger(APP_NAME)
@@ -56,21 +51,60 @@ def make_password(store: ConfigStore) -> bool:
         root.destroy()
 
 
-def main() -> int:
+def configure_logging(name: str) -> None:
     APP_DIR.mkdir(parents=True, exist_ok=True)
+    # Each process rotates its own file; Windows cannot rename a log another process holds open.
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
-        handlers=[RotatingFileHandler(APP_DIR / "taildesk.log", maxBytes=1_000_000, backupCount=2, encoding="utf-8")],
+        handlers=[RotatingFileHandler(APP_DIR / name, maxBytes=1_000_000, backupCount=2, encoding="utf-8")],
     )
+
+
+def supervise() -> int:
+    """Start the host worker and bring it back after crashes or hangs."""
+    configure_logging("taildesk-supervisor.log")
     if os.name != "nt":
         raise SystemExit("TailDesk currently runs on Windows 11.")
+    port = int(ConfigStore().snapshot().get("port", 8765))
+    if not acquire_single_instance():
+        # Start menu launches while TailDesk is running just open its settings.
+        if "--minimized" not in sys.argv:
+            webbrowser.open(f"http://127.0.0.1:{port}/")
+        return 0
+
+    from taildesk.updater import check_startup_update
 
     if check_startup_update():
         return 0
+    LOG.info("TailDesk supervisor started")
+    code = Supervisor(sys.argv, port).run()
+    LOG.info("TailDesk supervisor stopped (worker exit code %s)", code)
+    return code
+
+
+def main() -> int:
+    configure_logging("taildesk.log")
+    if os.name != "nt":
+        raise SystemExit("TailDesk currently runs on Windows 11.")
+    # Native faults in capture or encoding libraries bypass Python logging.
+    crash_path = APP_DIR / "taildesk-crash.log"
+    oversized = crash_path.exists() and crash_path.stat().st_size > 1_000_000
+    crash_log = crash_path.open("w" if oversized else "a", encoding="utf-8")
+    crash_log.write(f"--- TailDesk worker {os.getpid()} started {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    crash_log.flush()
+    faulthandler.enable(file=crash_log, all_threads=True)
+
+    from taildesk.display import DisplayController
+    from taildesk.network import HostListeners
+    from taildesk.server import create_app, find_tailscale_ipv4
+    from taildesk.startup import set_startup
+    from taildesk.tailscale_serve import configure_https
+    from taildesk.tray import create_tray
+    from taildesk.updater import configure_updates
 
     store = ConfigStore()
     if not store.has_password() and not make_password(store):
-        return 1
+        return EXIT_NO_PASSWORD
 
     settings = store.snapshot()
     if settings.get("startup", True):
@@ -131,10 +165,15 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if WORKER_FLAG not in sys.argv:
+        raise SystemExit(supervise())
     try:
         raise SystemExit(main())
     except Exception as exc:
         LOG.exception("TailDesk could not start")
+        if RESTARTED_FLAG in sys.argv:
+            # The supervisor retries with backoff; do not stack dialogs on an unattended host.
+            raise SystemExit(1)
         root = Tk()
         root.withdraw()
         messagebox.showerror(
