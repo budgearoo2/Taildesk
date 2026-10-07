@@ -26,8 +26,11 @@ from PIL import Image, ImageChops
 from taildesk.audio import AudioRouter
 from taildesk.config import ConfigStore, DEFAULT_TRANSFER_DIR
 from taildesk.cursor import cursor_style
+from taildesk.desktop_access import SECURE_DESKTOP_MESSAGE, desktop_notice, notice_image, secure_desktop_active
 from taildesk.display import DisplayController
 from taildesk.startup import set_startup
+from taildesk.supervisor import SUPERVISOR_PID_ENV
+from taildesk import updater
 from taildesk.network import validate_bind_address
 from taildesk.monitors import list_monitors
 from taildesk.tailscale_serve import configure_https
@@ -272,6 +275,7 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
         TAILDESK_ATTEMPTS=defaultdict(deque),
         TAILDESK_SERVE_URL=None,
         TAILDESK_SERVE_ERROR=None,
+        TAILDESK_EXIT_FOR_UPDATE=None,
     )
     state: ConnectionState = app.config["TAILDESK_STATE"]
 
@@ -400,7 +404,7 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
                 return jsonify(error="Another browser is currently controlling this PC."), 409
         except ValueError as exc:
             return jsonify(error=str(exc)), 409
-        return jsonify(ok=True, monitors=list_monitors(), selected_monitor=state.monitor_id)
+        return jsonify(ok=True, monitors=list_monitors(), selected_monitor=state.monitor_id, notice=desktop_notice())
 
     @app.post("/api/monitor")
     def select_monitor():
@@ -437,6 +441,19 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
                 previous = state.previous_frame
                 if request.args.get("monitor") and request.args["monitor"] != monitor["id"]:
                     return make_response("", 204)
+            if secure_desktop_active():
+                # Windows refuses capture of UAC's secure desktop; explain instead of failing,
+                # and send a full frame once the normal desktop returns.
+                output = io.BytesIO()
+                notice_image(monitor["width"], monitor["height"], SECURE_DESKTOP_MESSAGE).save(output, format="JPEG", quality=quality)
+                with state.lock:
+                    if revision == state.monitor_revision:
+                        state.previous_frame = None
+                response = make_response(output.getvalue())
+                response.headers["Content-Type"] = "image/jpeg"
+                response.headers["X-TailDesk-Monitor"] = monitor["id"]
+                response.headers["Cache-Control"] = "no-store"
+                return response
             with mss.mss() as capture:
                 frame = capture.grab({key: monitor[key] for key in ("left", "top", "width", "height")})
                 image = Image.frombytes("RGB", frame.size, frame.bgra, "raw", "BGRX")
@@ -520,6 +537,31 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
             state.realtime.close()
         state.release_inputs()
         return jsonify(ok=True)
+
+    update_lock = threading.Lock()
+
+    @app.post("/api/update")
+    def update_install():
+        """Check GitHub and, when newer, install the verified release and restart."""
+        exit_for_update = app.config.get("TAILDESK_EXIT_FOR_UPDATE")
+        if exit_for_update is None:
+            return jsonify(error="Updates can only be installed by the running TailDesk app."), 503
+        if not update_lock.acquire(blocking=False):
+            return jsonify(error="An update is already in progress."), 409
+        try:
+            # Setup must wait for the supervisor, which holds the installed program files.
+            version = updater.install_latest(int(os.environ.get(SUPERVISOR_PID_ENV) or os.getpid()))
+        except updater.UpdateError as exc:
+            update_lock.release()
+            LOG.warning("Update failed: %s", exc)
+            return jsonify(error=str(exc)), 503
+        if version is None:
+            update_lock.release()
+            return jsonify(ok=True, updating=False, current=__version__)
+        LOG.info("Installing TailDesk %s; closing so setup can replace the program files", version)
+        # Let this response reach the browser before the host closes.
+        threading.Timer(1.0, exit_for_update).start()
+        return jsonify(ok=True, updating=True, current=__version__, version=version)
 
     @app.post("/api/audio/install")
     def audio_install():

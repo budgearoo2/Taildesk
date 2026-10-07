@@ -94,6 +94,11 @@ class SettingsApiTests(unittest.TestCase):
         patcher = patch("taildesk.server.list_monitors", return_value=TEST_MONITORS)
         self.monitors = patcher.start()
         self.addCleanup(patcher.stop)
+        # CI runners may have no interactive desktop; tests choose the desktop state.
+        for name, value in (("secure_desktop_active", False), ("desktop_notice", None)):
+            desktop = patch(f"taildesk.server.{name}", return_value=value)
+            desktop.start()
+            self.addCleanup(desktop.stop)
         self.store = MemoryStore()
         self.display = FakeDisplay()
         with patch("taildesk.server.AudioRouter", FakeAudioRouter):

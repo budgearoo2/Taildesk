@@ -21,7 +21,10 @@ WORKER_FLAG = "--worker"
 RESTARTED_FLAG = "--restarted"
 EXIT_QUIT = 0
 EXIT_NO_PASSWORD = 3
-STOP_CODES = {EXIT_QUIT, EXIT_NO_PASSWORD}
+# The worker started setup, which waits for the supervisor to exit before installing.
+EXIT_UPDATE = 4
+STOP_CODES = {EXIT_QUIT, EXIT_NO_PASSWORD, EXIT_UPDATE}
+SUPERVISOR_PID_ENV = "TAILDESK_SUPERVISOR_PID"
 HEALTH_INTERVAL = 5
 HEALTH_TIMEOUT = 5
 # Roughly a minute of unanswered checks before a hung worker is replaced.
@@ -133,7 +136,10 @@ class Supervisor:
         quick_failures = 0
         while True:
             started = self.clock()
-            process = self.popen(worker_command(self.argv, restarted=restarted), close_fds=True)
+            process = self.popen(
+                worker_command(self.argv, restarted=restarted), close_fds=True,
+                env={**os.environ, SUPERVISOR_PID_ENV: str(os.getpid())},
+            )
             code = self._watch(process)
             if code in STOP_CODES:
                 return code

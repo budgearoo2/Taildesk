@@ -17,16 +17,6 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 APPDATA_DIR = Path(os.environ.get("APPDATA", Path.home())) / APP_NAME
 DEFAULT_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Programs" / APP_NAME
 START_MENU_DIR = Path(os.environ.get("APPDATA", Path.home())) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
-POWERSHELL = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
-# Paths travel in environment variables so folder names are never parsed as script.
-SHORTCUT_SCRIPT = (
-    "$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($env:TAILDESK_SHORTCUT); "
-    "$shortcut.TargetPath = $env:TAILDESK_TARGET; "
-    "$shortcut.WorkingDirectory = $env:TAILDESK_DIR; "
-    "$shortcut.IconLocation = $env:TAILDESK_TARGET + ',0'; "
-    "$shortcut.Description = 'Start the TailDesk remote desktop host'; "
-    "$shortcut.Save()"
-)
 
 
 def payload_dir() -> Path:
@@ -48,21 +38,28 @@ def set_startup(install_dir: Path, enabled: bool) -> None:
 
 def create_start_menu_shortcut(install_dir: Path) -> bool:
     """Add TailDesk to the Start menu so Windows search can find and relaunch it."""
+    # Use the Windows shell link COM API directly. Launching a hidden script host
+    # from an unsigned setup program looks like malware to antivirus heuristics.
     try:
+        import comtypes
+        import comtypes.client
+        from comtypes.persist import IPersistFile
+        from comtypes.shelllink import IShellLinkW, ShellLink
+
         START_MENU_DIR.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run(
-            [str(POWERSHELL), "-NoProfile", "-NonInteractive", "-Command", SHORTCUT_SCRIPT],
-            env={
-                **os.environ,
-                "TAILDESK_SHORTCUT": str(START_MENU_DIR / f"{APP_NAME}.lnk"),
-                "TAILDESK_TARGET": str(install_dir / f"{APP_NAME}.exe"),
-                "TAILDESK_DIR": str(install_dir),
-            },
-            capture_output=True, timeout=60, check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        return result.returncode == 0
-    except (OSError, subprocess.SubprocessError):
+        comtypes.CoInitialize()
+        try:
+            link = comtypes.client.CreateObject(ShellLink, interface=IShellLinkW)
+            target = str(install_dir / f"{APP_NAME}.exe")
+            link.SetPath(target)
+            link.SetWorkingDirectory(str(install_dir))
+            link.SetIconLocation(target, 0)
+            link.SetDescription("Start the TailDesk remote desktop host")
+            link.QueryInterface(IPersistFile).Save(str(START_MENU_DIR / f"{APP_NAME}.lnk"), True)
+        finally:
+            comtypes.CoUninitialize()
+        return True
+    except Exception:  # Includes comtypes.COMError; the shortcut never blocks setup.
         return False
 
 
@@ -119,16 +116,20 @@ def install(install_dir: Path, startup: bool | None, launch: bool, minimized: bo
     shortcut_created = create_start_menu_shortcut(install_dir)
 
     if launch:
-        flags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(
-            subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200
-        )
-        subprocess.Popen(
-            [str(install_dir / f"{APP_NAME}.exe"), *( ["--minimized"] if minimized else [])],
-            cwd=install_dir,
-            creationflags=flags,
-            close_fds=True,
-        )
+        start_app(install_dir, minimized)
     return shortcut_created
+
+
+def start_app(install_dir: Path, minimized: bool) -> None:
+    flags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(
+        subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200
+    )
+    subprocess.Popen(
+        [str(install_dir / f"{APP_NAME}.exe"), *( ["--minimized"] if minimized else [])],
+        cwd=install_dir,
+        creationflags=flags,
+        close_fds=True,
+    )
 
 
 def main() -> int:
@@ -199,6 +200,14 @@ def main() -> int:
         return 0
     except Exception as exc:
         if silent:
+            # Updates usually run unattended from a remote browser. Bring the
+            # installed version back so the host stays reachable; a still-running
+            # copy makes this launch exit through TailDesk's single-instance check.
+            if launch and (target_dir / f"{APP_NAME}.exe").is_file():
+                try:
+                    start_app(target_dir, minimized=True)
+                except OSError:
+                    pass
             return 1
         messagebox.showerror(APP_NAME, f"Setup could not finish:\n{exc}")
         return 1

@@ -13,6 +13,10 @@ class HostAccessTests(unittest.TestCase):
         patcher = patch("taildesk.server.list_monitors", return_value=TEST_MONITORS)
         patcher.start()
         self.addCleanup(patcher.stop)
+        for name, value in (("secure_desktop_active", False), ("desktop_notice", None)):
+            desktop = patch(f"taildesk.server.{name}", return_value=value)
+            desktop.start()
+            self.addCleanup(desktop.stop)
         self.store = MemoryStore()
         self.display = FakeDisplay()
         with patch("taildesk.server.AudioRouter", FakeAudioRouter):

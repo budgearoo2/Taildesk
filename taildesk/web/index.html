@@ -104,6 +104,10 @@
       <p id="secure-url" class="hint"></p>
       <label class="check"><input id="startup" type="checkbox"> Start TailDesk when I sign in to Windows</label>
       <p class="hint">Changes to the bind address or port need an app restart. HTTPS through Tailscale Serve uses a private Tailnet URL and enables automatic browser clipboard access. Direct Tailnet IPv4 HTTP remains available with manual clipboard controls.</p>
+      <h3>Updates</h3>
+      <p id="update-status" class="hint" role="status" aria-live="polite"></p>
+      <button id="update-install" class="quiet">Check for updates</button>
+      <p class="hint">Installs a newer GitHub release only after verifying its SHA-256 digest, then restarts TailDesk; this page reconnects automatically. Your settings and transfer folder are kept.</p>
       <button id="settings-save">Save settings</button>
     </div>
   </section>

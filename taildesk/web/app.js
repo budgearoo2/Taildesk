@@ -41,6 +41,7 @@
   let toastTimer;
   let latestStats = null;
   let realtimeEnabled = false;
+  let hostNotice = null;
   const mediaVideo = $("realtime-video");
   const realtime = window.TailDeskRealtime.create({
     video: mediaVideo, canvas: desktop, api, cursor: cursorSync,
@@ -107,12 +108,12 @@
     return data;
   }
 
-  function toast(message) {
+  function toast(message, duration = 3000) {
     const node = $("toast");
     node.textContent = message;
     node.style.display = "block";
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => (node.style.display = "none"), 3000);
+    toastTimer = setTimeout(() => (node.style.display = "none"), duration);
   }
 
   function showLogin() {
@@ -414,6 +415,9 @@
       body: JSON.stringify(size),
     });
     if (generation === frameGeneration && !switchingMonitor) renderMonitors(state);
+    // Secure prompts and elevated windows block capture or input; say so once per change.
+    if (state.notice && state.notice !== hostNotice) toast(state.notice, 8000);
+    hostNotice = state.notice || null;
     return state;
   }
 
@@ -665,7 +669,20 @@
     closeClipboardPanel();
   });
 
-  $("fullscreen").addEventListener("click", () => document.documentElement.requestFullscreen?.());
+  // Safari still exposes only the prefixed Fullscreen API.
+  const fullscreenElement = () => document.fullscreenElement || document.webkitFullscreenElement;
+  $("fullscreen").addEventListener("click", () => {
+    const root = document.documentElement;
+    const request = fullscreenElement()
+      ? (document.exitFullscreen || document.webkitExitFullscreen)?.call(document)
+      : (root.requestFullscreen || root.webkitRequestFullscreen)?.call(root);
+    request?.catch?.(() => {});
+  });
+  const showFullscreenState = () => {
+    $("fullscreen").textContent = fullscreenElement() ? "Exit fullscreen" : "Fullscreen";
+  };
+  document.addEventListener("fullscreenchange", showFullscreenState);
+  document.addEventListener("webkitfullscreenchange", showFullscreenState);
   $("files-toggle").addEventListener("click", () => {
     $("files").classList.toggle("hidden");
     loadFiles();
@@ -707,6 +724,7 @@
       const data = await api("/api/settings");
       const state = await api("/api/state");
       updateAudioStatus(state.audio);
+      if (!updateInProgress) $("update-status").textContent = `Installed version ${state.version}.`;
       fps = data.fps;
       configuredQuality = data.jpeg_quality;
       $("bind-host").value = data.bind_host;
@@ -724,6 +742,56 @@
     } catch (error) { toast(error.message); }
   });
   $("settings-close").addEventListener("click", () => $("settings").classList.add("hidden"));
+  let updateInProgress = false;
+  $("update-install").addEventListener("click", async () => {
+    const button = $("update-install");
+    const status = $("update-status");
+    button.disabled = true;
+    status.textContent = "Checking GitHub for a newer release...";
+    try {
+      const result = await api("/api/update", { method: "POST" });
+      if (!result.updating) {
+        status.textContent = `TailDesk ${result.current} is the latest version.`;
+        button.disabled = false;
+        return;
+      }
+      updateInProgress = true;
+      status.textContent = `Installing TailDesk ${result.version}. The host restarts and this page reconnects automatically.`;
+      waitForUpdatedHost(result.current);
+    } catch (error) {
+      status.textContent = error.message;
+      button.disabled = false;
+    }
+  });
+
+  function waitForUpdatedHost(previous) {
+    const started = Date.now();
+    let wentDown = false;
+    const finish = message => {
+      updateInProgress = false;
+      $("update-status").textContent = message;
+      $("update-install").disabled = false;
+    };
+    const poll = async () => {
+      try {
+        const response = await fetch("/api/state", { cache: "no-store" });
+        const state = response.ok ? await response.json() : null;
+        if (response.status === 401 || (state?.version && state.version !== previous)) { location.reload(); return; }
+        // Setup restarts the installed version when it cannot finish.
+        if (wentDown && state?.version === previous) {
+          finish(`The update did not install, so TailDesk ${previous} restarted. Check Windows Security on the host.`);
+          return;
+        }
+      } catch (_) { wentDown = true; }
+      if (Date.now() - started > 5 * 60 * 1000) {
+        finish("The host has not come back after five minutes. Start TailDesk on the host from the Start menu.");
+        return;
+      }
+      setTimeout(poll, 3000);
+    };
+    setTimeout(poll, 3000);
+  }
+
   $("settings-save").addEventListener("click", async () => {
     try {
       const data = await api("/api/settings", {

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.6
+
+- Keep the realtime stream connected while Windows shows a UAC secure desktop or lock screen: send an explanatory frame instead of failing, then resume the live picture automatically. The compatibility stream shows the same explanation and sends a full frame afterwards.
+- Retry DXGI capture a few seconds after it loses access instead of staying on slower GDI capture for the rest of the session; send a placeholder rather than ending the stream when capture fails briefly.
+- Warn the remote browser when the active host window runs as administrator, because Windows blocks standard-rights input to it.
+- Create the Start menu shortcut through the Windows shell link API instead of a hidden PowerShell process, which antivirus heuristics can treat as suspicious in an unsigned setup program.
+- Add **Check for updates** to Settings so the host can be updated from the remote browser. It installs only a newer digest-verified release, closes TailDesk with the usual display/audio/input restoration, restarts after setup, and reconnects the page. TailDesk keeps running if setup cannot start, and a failed unattended install restarts the installed version.
+- Make the Fullscreen button toggle, so a second click leaves fullscreen (including Safari's prefixed API), and label it **Exit fullscreen** while active.
+- Document SmartScreen and Defender handling for the unsigned setup program.
+
 ## 1.0.5
 
 - Run the host under a lightweight supervisor that restarts it after a crash, or once it has been serving and then goes about a minute without answering its loopback health check (or its Tailnet listener stops). Before restarting, reset displays to their saved Windows modes and release held keys and mouse buttons; the restarted host restores audio from its saved routing snapshot. Restarts back off when crashes repeat. Tray **Quit** still exits completely.

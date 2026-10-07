@@ -19,9 +19,11 @@ from aiortc.codecs.h264 import H264Encoder
 from aiortc.mediastreams import MediaStreamError
 
 from taildesk.cursor import cursor_style
+from taildesk.desktop_access import CAPTURE_PAUSED_MESSAGE, SECURE_DESKTOP_MESSAGE, notice_image, secure_desktop_active
 
 LOG = logging.getLogger("TailDesk.realtime")
 VIDEO_CLOCK = Fraction(1, 90000)
+DXGI_RETRY_SECONDS = 5
 _host_addresses = aioice.ice.get_host_addresses
 
 
@@ -117,7 +119,8 @@ class DesktopTrack(MediaStreamTrack):
         self.capture = None
         self.camera = None
         self.camera_key = None
-        self.dxgi_failed = False
+        self.dxgi_retry_at = 0.0
+        self.capture_failing = False
         self.com_ready = False
         self.close_future = None
         self.next_frame = 0
@@ -131,14 +134,49 @@ class DesktopTrack(MediaStreamTrack):
             import comtypes
             comtypes.CoInitialize()
             self.com_ready = True
-        if not self.dxgi_failed:
+        # Keep frames flowing while Windows hides the desktop so the browser keeps
+        # the realtime connection and the picture resumes by itself afterwards.
+        if secure_desktop_active():
+            self.release_camera()
+            return self.notice_frame(monitor, SECURE_DESKTOP_MESSAGE)
+        try:
+            frame = self.capture_frame(monitor)
+        except Exception:
+            if not self.capture_failing:
+                LOG.warning("Desktop capture failed; sending a placeholder until it recovers", exc_info=True)
+            self.capture_failing = True
+            self.release_camera()
+            if self.capture:
+                self.capture.close()
+                self.capture = None
+            return self.notice_frame(monitor, CAPTURE_PAUSED_MESSAGE)
+        if self.capture_failing:
+            LOG.info("Desktop capture recovered")
+            self.capture_failing = False
+        return frame
+
+    def release_camera(self):
+        if self.camera:
+            try:
+                self.camera.release()
+            except Exception:
+                LOG.debug("Could not release the DXGI camera", exc_info=True)
+        self.camera = None
+        self.camera_key = None
+
+    def notice_frame(self, monitor, message):
+        image = notice_image(monitor["width"] // 2 * 2, monitor["height"] // 2 * 2, message)
+        frame = av.VideoFrame.from_image(image).reformat(format="yuv420p")
+        frame.pts, frame.time_base = int(time.monotonic() * 90000), VIDEO_CLOCK
+        return frame
+
+    def capture_frame(self, monitor):
+        if time.monotonic() >= self.dxgi_retry_at:
             try:
                 import dxcam
                 key = (monitor["id"], monitor["width"], monitor["height"])
                 if self.camera_key != key:
-                    if self.camera:
-                        self.camera.release()
-                    self.camera = None
+                    self.release_camera()
                     # Version 0.3 is pinned; match actual Windows device names,
                     # never assume primary-first enumeration matches DXGI order.
                     factory = getattr(dxcam, "__factory")
@@ -154,11 +192,11 @@ class DesktopTrack(MediaStreamTrack):
                     frame.pts, frame.time_base = int(time.monotonic() * 90000), VIDEO_CLOCK
                     return frame
             except Exception:
-                LOG.warning("DXGI capture unavailable; using GDI", exc_info=True)
-                self.dxgi_failed = True
-                if self.camera:
-                    self.camera.release()
-                    self.camera = None
+                # DXGI loses access around desktop switches; retry it later instead of
+                # staying on slower GDI capture for the rest of the session.
+                LOG.warning("DXGI capture unavailable; using GDI for now", exc_info=True)
+                self.dxgi_retry_at = time.monotonic() + DXGI_RETRY_SECONDS
+                self.release_camera()
         if self.capture is None:
             self.capture = mss.mss()
         shot = self.capture.grab({key: monitor[key] for key in ("left", "top", "width", "height")})

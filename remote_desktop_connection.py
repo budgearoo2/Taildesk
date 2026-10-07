@@ -14,7 +14,7 @@ import webbrowser
 from tkinter import Tk, messagebox, simpledialog
 
 from taildesk.config import APP_DIR, ConfigStore
-from taildesk.supervisor import EXIT_NO_PASSWORD, RESTARTED_FLAG, WORKER_FLAG, Supervisor, acquire_single_instance
+from taildesk.supervisor import EXIT_NO_PASSWORD, EXIT_QUIT, EXIT_UPDATE, RESTARTED_FLAG, WORKER_FLAG, Supervisor, acquire_single_instance
 
 APP_NAME = "TailDesk"
 LOG = logging.getLogger(APP_NAME)
@@ -153,6 +153,15 @@ def main() -> int:
         on_install_audio=connection_state.audio.open_driver_setup,
         on_configure_updates=configure_updates,
     )
+    exit_code = EXIT_QUIT
+
+    def exit_for_update() -> None:
+        # Setup is already running and waiting; the supervisor exits on this code.
+        nonlocal exit_code
+        exit_code = EXIT_UPDATE
+        tray.stop()
+
+    app.config["TAILDESK_EXIT_FOR_UPDATE"] = exit_for_update
     if "--minimized" not in sys.argv:
         webbrowser.open(local_url)
     try:
@@ -161,7 +170,7 @@ def main() -> int:
         connection_state.disconnect()
         display.restore()
         listeners.close()
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":

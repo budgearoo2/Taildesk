@@ -182,45 +182,83 @@ def _download_setup(asset: dict, token: str, destination: Path) -> bool:
     return True
 
 
-def check_startup_update() -> bool:
-    """Download and launch a digest-verified setup if a newer release is available."""
+class UpdateError(Exception):
+    """A user-facing reason an update could not be checked or installed."""
+
+
+def _latest_release(token: str) -> dict:
+    with _request(RELEASES_API, token) as response:
+        return json.loads(response.read(1024 * 1024))
+
+
+def _newer_setup(release: dict) -> tuple[str, dict] | None:
+    """Return the newer stable version and its setup asset, if the release has one."""
+    latest = _version_tuple(str(release.get("tag_name", "")))
+    current = _version_tuple(__version__)
+    if not latest or not current or latest <= current or release.get("prerelease"):
+        return None
+    version = ".".join(map(str, latest))
+    expected_name = f"TailDesk-Setup-{version}.exe"
+    asset = next((a for a in release.get("assets", []) if a.get("name") == expected_name), None)
+    if not asset:
+        raise UpdateError(f"Release {version} does not contain {expected_name}.")
+    return version, asset
+
+
+def _launch_setup(setup: Path, wait_pid: int) -> None:
+    install_dir = Path(sys.executable).resolve().parent
+    flags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(
+        subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200
+    )
+    subprocess.Popen(
+        [str(setup), "--silent", f"--target={install_dir}", f"--wait-pid={wait_pid}"],
+        cwd=install_dir,
+        creationflags=flags,
+        close_fds=True,
+    )
+
+
+def _download_verified(version: str, asset: dict, token: str) -> Path:
+    update_dir = Path(tempfile.gettempdir()) / "TailDesk" / "updates"
+    update_dir.mkdir(parents=True, exist_ok=True)
+    setup = update_dir / f"TailDesk-Setup-{version}.exe"
+    if not _download_setup(asset, token, setup):
+        raise UpdateError("The downloaded setup did not match the release's SHA-256 digest; nothing was installed.")
+    return setup
+
+
+def install_latest(wait_pid: int) -> str | None:
+    """Download, verify, and start setup for a newer release; return its version.
+
+    Setup waits for `wait_pid` (the process holding the installed files) to exit,
+    installs, and starts TailDesk again. Returns None when already up to date.
+    """
     if not getattr(sys, "frozen", False):
-        return False
+        raise UpdateError("Updates can only be installed by the packaged TailDesk app.")
     token = _load_token()
     if not token:
+        raise UpdateError("Updates are not configured. On the host, choose Configure GitHub updates in the TailDesk tray menu.")
+    try:
+        update = _newer_setup(_latest_release(token))
+        if update is None:
+            return None
+        version, asset = update
+        setup = _download_verified(version, asset, token)
+        _launch_setup(setup, wait_pid)
+    except urllib.error.HTTPError as exc:
+        raise UpdateError(f"GitHub rejected the update download (HTTP {exc.code}).") from None
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        # Includes Windows Security refusing to start the setup program.
+        raise UpdateError(f"The update could not be started: {exc}") from None
+    return version
+
+
+def check_startup_update() -> bool:
+    """Download and launch a digest-verified setup if a newer release is available."""
+    if not getattr(sys, "frozen", False) or not _load_token():
         return False
     try:
-        with _request(RELEASES_API, token) as response:
-            release = json.loads(response.read(1024 * 1024))
-        latest = _version_tuple(str(release.get("tag_name", "")))
-        current = _version_tuple(__version__)
-        if not latest or not current or latest <= current or release.get("prerelease"):
-            return False
-
-        version = ".".join(map(str, latest))
-        expected_name = f"TailDesk-Setup-{version}.exe"
-        asset = next((a for a in release.get("assets", []) if a.get("name") == expected_name), None)
-        if not asset:
-            LOG.error("The latest release does not contain %s", expected_name)
-            return False
-
-        update_dir = Path(tempfile.gettempdir()) / "TailDesk" / "updates"
-        update_dir.mkdir(parents=True, exist_ok=True)
-        setup = update_dir / expected_name
-        if not _download_setup(asset, token, setup):
-            return False
-
-        install_dir = Path(sys.executable).resolve().parent
-        flags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(
-            subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200
-        )
-        subprocess.Popen(
-            [str(setup), "--silent", f"--target={install_dir}", f"--wait-pid={os.getpid()}"],
-            cwd=install_dir,
-            creationflags=flags,
-            close_fds=True,
-        )
-        return True
-    except (OSError, ValueError, KeyError, json.JSONDecodeError, urllib.error.URLError):
+        return install_latest(os.getpid()) is not None
+    except UpdateError:
         LOG.exception("Automatic update check failed; starting the installed version")
         return False
