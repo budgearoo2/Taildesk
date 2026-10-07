@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.7
+
+- Fix setup failing with "file is being used by another process" when TailDesk is running. Windows will not overwrite a running `TailDesk.exe`, and earlier setup programs never closed it, so installing over a running copy (including through a remote session) always failed. Setup now closes TailDesk processes running from the install folder, resets the display mode and releases held input, installs, and starts TailDesk again even when **Open TailDesk after setup** is unticked. If copying fails after it closed TailDesk, setup restarts the installed version before reporting the error.
+
 ## 1.0.6
 
 - Keep the realtime stream connected while Windows shows a UAC secure desktop or lock screen: send an explanatory frame instead of failing, then resume the live picture automatically. The compatibility stream shows the same explanation and sends a full frame afterwards.

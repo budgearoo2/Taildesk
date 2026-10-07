@@ -84,13 +84,99 @@ def wait_for_process_exit(process_id: int, timeout_seconds: int = 45) -> None:
         kernel.CloseHandle(handle)
 
 
+def _kernel32():
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.K32EnumProcesses.argtypes = [ctypes.POINTER(ctypes.c_ulong), ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong)]
+    kernel.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+    kernel.OpenProcess.restype = ctypes.c_void_p
+    kernel.QueryFullProcessImageNameW.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_ulong)]
+    kernel.TerminateProcess.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    kernel.WaitForSingleObject.restype = ctypes.c_ulong
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    return kernel
+
+
+def running_copies(install_dir: Path) -> list[int]:
+    """Process IDs of TailDesk running from install_dir (supervisor and worker)."""
+    target = os.path.normcase(os.path.abspath(install_dir / f"{APP_NAME}.exe"))
+    kernel = _kernel32()
+    ids = (ctypes.c_ulong * 4096)()
+    used = ctypes.c_ulong()
+    if not kernel.K32EnumProcesses(ids, ctypes.sizeof(ids), ctypes.byref(used)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    matches = []
+    for process_id in ids[: used.value // ctypes.sizeof(ctypes.c_ulong)]:
+        handle = kernel.OpenProcess(0x1000, False, process_id)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            continue
+        try:
+            name = ctypes.create_unicode_buffer(32768)
+            size = ctypes.c_ulong(len(name))
+            if kernel.QueryFullProcessImageNameW(handle, 0, name, ctypes.byref(size)) and os.path.normcase(name.value) == target:
+                matches.append(process_id)
+        finally:
+            kernel.CloseHandle(handle)
+    return matches
+
+
+def _terminate(process_id: int) -> None:
+    kernel = _kernel32()
+    handle = kernel.OpenProcess(0x0001 | 0x00100000, False, process_id)  # PROCESS_TERMINATE | SYNCHRONIZE
+    if not handle:
+        return
+    try:
+        kernel.TerminateProcess(handle, 1)
+        kernel.WaitForSingleObject(handle, 5000)
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def stop_running_copies(install_dir: Path, timeout_seconds: float = 30) -> bool:
+    """Close TailDesk so its locked program files can be replaced; True if any ran.
+
+    Windows refuses to overwrite a running executable, so updating over a running
+    TailDesk always failed. A supervisor may start a new worker after its worker
+    ends, so repeat until no copy remains.
+    """
+    stopped = False
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        process_ids = running_copies(install_dir)
+        if not process_ids:
+            break
+        if time.monotonic() > deadline:
+            raise TimeoutError("TailDesk is still running and could not be closed. Quit it from the tray and run setup again.")
+        for process_id in process_ids:
+            _terminate(process_id)
+        stopped = True
+    if stopped:
+        # The closed host could not restore a remote session's display mode or held input.
+        from taildesk.supervisor import restore_desktop
+
+        restore_desktop()
+    return stopped
+
+
 def install(install_dir: Path, startup: bool | None, launch: bool, minimized: bool = False) -> bool:
     source = payload_dir()
     if not (source / f"{APP_NAME}.exe").is_file():
         raise FileNotFoundError("The bundled TailDesk application files are missing.")
 
     install_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source, install_dir, dirs_exist_ok=True)
+    was_running = stop_running_copies(install_dir)
+    # Setup is often run through TailDesk itself; always bring it back afterwards.
+    launch = launch or was_running
+    minimized = minimized or was_running
+    try:
+        shutil.copytree(source, install_dir, dirs_exist_ok=True)
+    except Exception:
+        if was_running and (install_dir / f"{APP_NAME}.exe").is_file():
+            try:
+                start_app(install_dir, minimized=True)
+            except OSError:
+                pass
+        raise
 
     APPDATA_DIR.mkdir(parents=True, exist_ok=True)
     settings = APPDATA_DIR / "settings.json"
@@ -148,13 +234,14 @@ def main() -> int:
         root = Tk()
         root.title(f"Install {APP_NAME}")
         root.resizable(False, False)
-        root.geometry("470x260")
+        root.geometry("470x310")
         frame = ttk.Frame(root, padding=22)
         frame.pack(fill="both", expand=True)
         ttk.Label(frame, text="Install TailDesk", font=("Segoe UI", 17, "bold")).pack(anchor="w")
         ttk.Label(
             frame,
-            text="TailDesk includes its Python runtime and required packages. No separate Python setup is needed.",
+            text="TailDesk includes its Python runtime and required packages. No separate Python setup is needed. "
+            "If TailDesk is running, setup closes it and starts the new version when finished; a remote session reconnects after a short break.",
             wraplength=420,
         ).pack(anchor="w", pady=(8, 16))
 
