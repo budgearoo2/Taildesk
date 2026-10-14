@@ -1,0 +1,48 @@
+name: Verify TailDesk
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install and verify application dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { throw "Could not upgrade pip." }
+          python -m pip install -r .\requirements.txt PyYAML==6.0.3
+          if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed." }
+          python -m pip install pip-audit
+          if ($LASTEXITCODE -ne 0) { throw "Could not install dependency audit." }
+          python -m pip_audit -r .\requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw "Dependency audit failed." }
+          python -m compileall -q .\taildesk .\remote_desktop_connection.py .\installer.py .\tests
+          if ($LASTEXITCODE -ne 0) { throw "Python compilation failed." }
+          python -m unittest discover -s .\tests -v
+          if ($LASTEXITCODE -ne 0) { throw "Python regression tests failed." }
+          Get-ChildItem .\taildesk\web\*.js | ForEach-Object {
+            node --check $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "JavaScript syntax verification failed." }
+          }
+          $browserTests = @(Get-ChildItem .\tests\*.test.cjs | ForEach-Object { $_.FullName })
+          node --test @browserTests
+          if ($LASTEXITCODE -ne 0) { throw "Browser regression tests failed." }
+
