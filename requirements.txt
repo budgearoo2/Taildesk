@@ -1,6 +1,6 @@
 Flask>=3.0,<4
 mss>=9,<11
-Pillow>=10,<13
+Pillow>=13,<14
 PyAutoGUI>=0.9.54,<1
 Pyperclip>=1.9,<2
 pycaw>=20260927,<20270101
