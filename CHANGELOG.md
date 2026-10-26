@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.8
+
+- Add an **IN GAME** button for playing games remotely. Games that read hardware scan codes (Godot, Unity and others) ignored TailDesk's keys, because PyAutoGUI sends scan code 0, so held keys such as F or WASD did nothing. Game mode sends the browser's physical key codes and injects them with `SendInput` and real scan codes (extended keys flagged), held and repeated like a local keyboard, and released on disconnect, screen switches, window blur, or when game mode ends. It enters fullscreen and, in Chrome or Edge over HTTPS, locks the keyboard so Esc and most system shortcuts reach the host. **Shift+E+Enter** (any order) leaves game mode without sending the completing key. Normal keyboard forwarding is unchanged when game mode is off.
+- The crash supervisor now releases still-held keys with their scan codes, so a game sees them released.
+- Fix releasing held mouse buttons when keys are released (window blur, screen switch, sign-out), which referenced an undefined pointer position.
+
 ## 1.0.7
 
 - Fix setup failing with "file is being used by another process" when TailDesk is running. Windows will not overwrite a running `TailDesk.exe`, and earlier setup programs never closed it, so installing over a running copy (including through a remote session) always failed. Setup now closes TailDesk processes running from the install folder, resets the display mode and releases held input, installs, and starts TailDesk again even when **Open TailDesk after setup** is unticked. If copying fails after it closed TailDesk, setup restarts the installed version before reporting the error.

@@ -25,6 +25,15 @@
   );
   let held = new Set();
   let heldButtons = new Set();
+  let latestMove = null;
+  // Game mode sends physical keys, tracked by KeyboardEvent.code (see game_mode.js).
+  const gameKeys = window.TailDeskGameMode;
+  const exitCombo = gameKeys.createExitCombo();
+  let gameMode = false;
+  let gameFullscreen = false;
+  let keyboardLocked = false;
+  let heldCodes = new Set();
+  let swallowedCodes = new Set();
   let fps = 8;
   let adaptiveFps = 6;
   let configuredQuality = 65;
@@ -117,6 +126,7 @@
   }
 
   function showLogin() {
+    setGameMode(false, { quiet: true });
     realtime.stop();
     mediaVideo.muted = true;
     frameGeneration += 1;
@@ -179,7 +189,7 @@
         $("host-home").classList.remove("hidden");
         $("connection").textContent = "Host settings";
         $("sign-out").classList.toggle("hidden", !!state.local_access);
-        for (const id of ["fullscreen", "monitor-select", "audio-toggle", "stats-toggle", "clipboard", "files-toggle"]) $(id).classList.add("hidden");
+        for (const id of ["fullscreen", "game-mode", "monitor-select", "audio-toggle", "stats-toggle", "clipboard", "files-toggle"]) $(id).classList.add("hidden");
         renderHostStatus(state);
         hostStatusTimer = setInterval(async () => {
           try { renderHostStatus(await api("/api/state")); }
@@ -510,14 +520,16 @@
   }
 
   desktop.addEventListener("pointermove", (event) => {
-    if (active) input("move", screenPoint(event));
+    latestMove = screenPoint(event);
+    if (active) input("move", latestMove);
   });
   desktop.addEventListener("pointerdown", (event) => {
     desktop.focus();
     desktop.setPointerCapture?.(event.pointerId);
     const button = event.button === 2 ? "right" : event.button === 1 ? "middle" : "left";
     heldButtons.add(button);
-    input("mouse_down", { ...screenPoint(event), button });
+    latestMove = screenPoint(event);
+    input("mouse_down", { ...latestMove, button });
     event.preventDefault();
   });
   function releaseButton(event) {
@@ -554,6 +566,9 @@
     return null;
   }
   desktop.addEventListener("keydown", (event) => {
+    // Keys still held from the game-mode exit combo stay on this device.
+    if (swallowedCodes.has(event.code)) { event.preventDefault(); return; }
+    if (gameMode) { gameKeyDown(event); return; }
     if (["F5", "F11"].includes(event.key)) return;
     event.preventDefault();
     const shortcut = event.ctrlKey || (appleKeyboard && event.metaKey);
@@ -573,16 +588,52 @@
     }
   });
   desktop.addEventListener("keyup", (event) => {
+    if (swallowedCodes.delete(event.code)) return;
+    if (gameMode) { gameKeyUp(event); return; }
     const key = keyName(event);
     if (key && held.has(key)) {
       held.delete(key);
       input("up", { key });
     }
   });
+  function gameKeyDown(event) {
+    event.preventDefault();
+    if (exitCombo.down(event.code)) {
+      const stillHeld = exitCombo.held();
+      setGameMode(false);
+      swallowedCodes = new Set(stillHeld);
+      return;
+    }
+    const code = gameKeys.hostCode(event.code, appleKeyboard);
+    if (!code) return;
+    if (!heldCodes.has(code)) {
+      heldCodes.add(code);
+      input("game_down", { code });
+    } else if (event.repeat) {
+      input("game_down", { code, repeat: true });
+    }
+  }
+  function gameKeyUp(event) {
+    exitCombo.up(event.code);
+    const code = gameKeys.hostCode(event.code, appleKeyboard);
+    if (code && heldCodes.has(code)) {
+      heldCodes.delete(code);
+      input("game_up", { code });
+    }
+    // macOS sends no keyup for keys released while Command is down; release them with it.
+    if (appleKeyboard && event.key === "Meta") {
+      for (const other of heldCodes) input("game_up", { code: other });
+      heldCodes.clear();
+    }
+  }
   window.addEventListener("blur", releaseKeys);
   function releaseKeys() {
     for (const key of held) input("up", { key });
     held.clear();
+    for (const code of heldCodes) input("game_up", { code });
+    heldCodes.clear();
+    exitCombo.reset();
+    swallowedCodes.clear();
     for (const button of heldButtons) input("mouse_up", { ...(latestMove || { x: 0, y: 0 }), button });
     heldButtons.clear();
   }
@@ -671,18 +722,56 @@
 
   // Safari still exposes only the prefixed Fullscreen API.
   const fullscreenElement = () => document.fullscreenElement || document.webkitFullscreenElement;
-  $("fullscreen").addEventListener("click", () => {
+  function setFullscreen(enabled) {
     const root = document.documentElement;
-    const request = fullscreenElement()
-      ? (document.exitFullscreen || document.webkitExitFullscreen)?.call(document)
-      : (root.requestFullscreen || root.webkitRequestFullscreen)?.call(root);
+    const request = enabled
+      ? (root.requestFullscreen || root.webkitRequestFullscreen)?.call(root)
+      : (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
     request?.catch?.(() => {});
-  });
+  }
+  $("fullscreen").addEventListener("click", () => setFullscreen(!fullscreenElement()));
   const showFullscreenState = () => {
     $("fullscreen").textContent = fullscreenElement() ? "Exit fullscreen" : "Fullscreen";
+    // Chrome's hold-Esc exit also ends the keyboard lock; leave game mode with it.
+    if (gameMode && keyboardLocked && !fullscreenElement()) setGameMode(false);
   };
   document.addEventListener("fullscreenchange", showFullscreenState);
   document.addEventListener("webkitfullscreenchange", showFullscreenState);
+
+  $("game-mode").addEventListener("click", () => setGameMode(!gameMode));
+  function setGameMode(enabled, { quiet = false } = {}) {
+    if (enabled === gameMode || (enabled && !active)) return;
+    releaseKeys();
+    gameMode = enabled;
+    $("game-mode").setAttribute("aria-pressed", String(enabled));
+    $("game-mode").classList.toggle("active", enabled);
+    // Keep keys on the desktop; a focused button would turn Space/Enter into clicks.
+    desktop.focus();
+    if (enabled) {
+      // Fullscreen must be requested during the button click.
+      gameFullscreen = !fullscreenElement();
+      if (gameFullscreen) setFullscreen(true);
+      lockKeyboard();
+      toast(navigator.keyboard?.lock
+        ? `Game mode on: every key goes to the host. Press ${gameKeys.EXIT_LABEL} together to leave.`
+        : `Game mode on. Press ${gameKeys.EXIT_LABEL} together to leave. This browser keeps Esc and system shortcuts; open the HTTPS address in Chrome or Edge to send those too.`, 7000);
+      return;
+    }
+    keyboardLocked = false;
+    navigator.keyboard?.unlock?.();
+    if (gameFullscreen && fullscreenElement()) setFullscreen(false);
+    gameFullscreen = false;
+    if (!quiet) toast("Game mode off. Keys type normally again.");
+  }
+  async function lockKeyboard() {
+    keyboardLocked = false;
+    if (!navigator.keyboard?.lock) return;
+    try {
+      // Chrome and Edge over HTTPS; the lock applies while the page is fullscreen.
+      await navigator.keyboard.lock();
+      keyboardLocked = gameMode;
+    } catch (_) {}
+  }
   $("files-toggle").addEventListener("click", () => {
     $("files").classList.toggle("hidden");
     loadFiles();

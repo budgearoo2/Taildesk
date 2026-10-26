@@ -13,6 +13,7 @@
     <span id="connection" class="connection">Disconnected</span>
     <span class="spacer"></span>
     <button id="fullscreen">Fullscreen</button>
+    <button id="game-mode" aria-pressed="false" title="Send every key as a physical key press so games respond. Press Shift+E+Enter together to leave.">IN GAME</button>
     <select id="monitor-select" aria-label="Screen to view" title="Choose a host screen" disabled>
       <option value="">Detecting screens...</option>
     </select>
@@ -118,6 +119,7 @@
   <script src="{{ url_for('static', filename='screen_protocol.js') }}" defer></script>
   <script src="{{ url_for('static', filename='cursor_sync.js') }}" defer></script>
   <script src="{{ url_for('static', filename='realtime.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='game_mode.js') }}" defer></script>
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </body>
 </html>

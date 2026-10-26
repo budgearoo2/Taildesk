@@ -28,6 +28,7 @@ from taildesk.config import ConfigStore, DEFAULT_TRANSFER_DIR
 from taildesk.cursor import cursor_style
 from taildesk.desktop_access import SECURE_DESKTOP_MESSAGE, desktop_notice, notice_image, secure_desktop_active
 from taildesk.display import DisplayController
+from taildesk import game_input
 from taildesk.startup import set_startup
 from taildesk.supervisor import SUPERVISOR_PID_ENV
 from taildesk import updater
@@ -69,6 +70,7 @@ class ConnectionState:
         self.connected = False
         self.owner: str | None = None
         self.held_keys: set[str] = set()
+        self.held_game_keys: set[str] = set()
         self.held_buttons: set[str] = set()
         self.previous_frame: Image.Image | None = None
         self.frame_lock = threading.Lock()
@@ -115,8 +117,10 @@ class ConnectionState:
             if owner is not None and self.owner != owner:
                 return
             keys = tuple(self.held_keys)
+            game_keys = tuple(self.held_game_keys)
             buttons = tuple(self.held_buttons)
             self.held_keys.clear()
+            self.held_game_keys.clear()
             self.held_buttons.clear()
             self.previous_frame = None
             self.connected = False
@@ -128,20 +132,26 @@ class ConnectionState:
             self.audio.disconnect()
         except Exception:
             LOG.exception("Could not restore audio; continuing to restore input and display")
-        self.release_inputs(keys, buttons)
+        self.release_inputs(keys, buttons, game_keys)
         self.display.restore()
 
-    def release_inputs(self, keys=None, buttons=None) -> None:
+    def release_inputs(self, keys=None, buttons=None, game_keys=()) -> None:
         with self.lock:
             if keys is None:
-                keys, buttons = tuple(self.held_keys), tuple(self.held_buttons)
+                keys, buttons, game_keys = tuple(self.held_keys), tuple(self.held_buttons), tuple(self.held_game_keys)
                 self.held_keys.clear()
+                self.held_game_keys.clear()
                 self.held_buttons.clear()
         for key in keys:
             try:
                 pyautogui.keyUp(key)
             except Exception:
                 LOG.exception("Could not release a held input key")
+        for code in game_keys:
+            try:
+                game_input.send_key(code, up=True)
+            except Exception:
+                LOG.exception("Could not release a held game-mode key")
         for button in buttons:
             try:
                 pyautogui.mouseUp(button=button)
@@ -191,6 +201,20 @@ class ConnectionState:
             if key in self.held_keys:
                 pyautogui.keyUp(key)
                 self.held_keys.discard(key)
+
+    def game_key_down(self, code: str, repeat: bool = False) -> None:
+        with self.lock:
+            if code not in self.held_game_keys:
+                game_input.send_key(code)
+                self.held_game_keys.add(code)
+            elif repeat:
+                game_input.send_key(code)
+
+    def game_key_up(self, code: str) -> None:
+        with self.lock:
+            if code in self.held_game_keys:
+                game_input.send_key(code, up=True)
+                self.held_game_keys.discard(code)
 
     def mouse_down(self, button: str, x: int, y: int) -> None:
         with self.lock:
@@ -326,7 +350,7 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
         if request.path in {"/", "/api/login", "/api/health"} or (
             request.endpoint == "static" and request.view_args.get("filename") in {
                 "style.css", "app.js", "screen_protocol.js", "adaptive_stream.js",
-                "input_queue.js", "stream_stats.js", "cursor_sync.js", "realtime.js",
+                "input_queue.js", "stream_stats.js", "cursor_sync.js", "realtime.js", "game_mode.js",
             }
         ):
             return None
@@ -613,6 +637,15 @@ def create_app(store: ConfigStore, display: DisplayController) -> Flask:
                 state.key_down(key, bool(data.get("repeat", False)))
             else:
                 state.key_up(key)
+        elif kind in {"game_down", "game_up"}:
+            # Game mode names physical keys; they are injected with hardware scan codes.
+            code = str(data.get("code", ""))
+            if code not in game_input.SCAN_CODES:
+                abort(400)
+            if kind == "game_down":
+                state.game_key_down(code, bool(data.get("repeat", False)))
+            else:
+                state.game_key_up(code)
         elif kind == "scroll":
             try:
                 wheel_delta = max(-2400, min(2400, round(-float(data.get("delta", 0)) * 3)))

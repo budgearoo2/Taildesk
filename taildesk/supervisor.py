@@ -103,13 +103,18 @@ def restore_desktop() -> None:
         user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
         user32.GetAsyncKeyState.restype = ctypes.c_short
         user32.keybd_event.argtypes = [ctypes.c_ubyte, ctypes.c_ubyte, ctypes.c_uint32, ctypes.c_size_t]
+        user32.MapVirtualKeyW.argtypes = [ctypes.c_uint, ctypes.c_uint]
+        user32.MapVirtualKeyW.restype = ctypes.c_uint
         user32.mouse_event.argtypes = [ctypes.c_uint32, ctypes.c_int32, ctypes.c_int32, ctypes.c_uint32, ctypes.c_size_t]
         for button, up_flag in ((0x01, 0x0004), (0x02, 0x0010), (0x04, 0x0040)):
             if user32.GetAsyncKeyState(button) & 0x8000:
                 user32.mouse_event(up_flag, 0, 0, 0, 0)
         for key in range(0x08, 0xFF):
             if user32.GetAsyncKeyState(key) & 0x8000:
-                user32.keybd_event(key, 0, 0x0002, 0)  # KEYEVENTF_KEYUP
+                # Include the scan code: games track game-mode keys by it and ignore a release without one.
+                scan = user32.MapVirtualKeyW(key, 4)  # MAPVK_VK_TO_VSC_EX
+                extended = 0x0001 if scan >> 8 in (0xE0, 0xE1) else 0  # KEYEVENTF_EXTENDEDKEY
+                user32.keybd_event(key, scan & 0xFF, 0x0002 | extended, 0)  # KEYEVENTF_KEYUP
     except Exception:
         LOG.exception("Could not release held input after a worker failure")
 
