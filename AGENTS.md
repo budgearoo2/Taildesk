@@ -1,6 +1,6 @@
 # TailDesk project instructions
 
-For every requested code change or feature in this project, read `UPDATE_PIPELINE.md` and follow it: complete and review the change, commit and push it to the connected GitHub repository, publish a new versioned GitHub Release, then update the host PC from that release. Do not deploy an unreleased working copy.
+Read `UPDATE_PIPELINE.md` for every change. Review and verify repository changes before committing and pushing them. Ordinary source, documentation, and workflow updates run verification without publishing. Publish a new versioned release only when an application release is explicitly intended; update the host only from that published release. Do not deploy an unreleased working copy.
 
 Keep the default listener bound to the Tailnet IPv4 address only. Do not add router port-forwarding or Tailscale Funnel instructions. Preserve password authentication, safe file-path handling, single-controller ownership, held-key and mouse-button release, and unconditional display-mode and audio-output restoration on disconnect or timeout.
 
